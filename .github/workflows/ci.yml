@@ -15,8 +15,8 @@ jobs:
       matrix:
         python-version: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install package
@@ -27,4 +27,3 @@ jobs:
         run: python -m compileall -q src tests
       - name: Smoke test reproducible demo
         run: signaljudge demo --db /tmp/signaljudge-ci.db --output-dir /tmp/signaljudge-artifacts
-
