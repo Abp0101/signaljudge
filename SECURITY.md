@@ -28,12 +28,12 @@ Untrusted inputs:
 
 | Threat | Control |
 |---|---|
-| Secret committed or logged | `.env` ignored; header authentication; no request/header logging; placeholder only in `.env.example` |
+| Secret committed or logged | `.env` ignored; secret-bearing V4 request URLs are never logged or exception-chained; placeholder only in `.env.example` |
 | SSRF through configurable URL | Fixed HTTPS base URL and sport-key allowlist |
 | Malformed or oversized input | Strict types/ranges, identifier constraints, record and byte limits |
 | Unsafe deserialization | JSON only; no pickle, YAML object construction or dynamic imports |
 | Incorrect event reconciliation | Provider ID, exact team verification and bounded time check |
-| API quota exhaustion | Batch fetch, ETag/304 cache, bounded retries and `Retry-After` support |
+| API quota exhaustion | One batch fetch per sport, usage-header tracking, bounded retries and `Retry-After` support |
 | Provider outage | Timeouts and last-known-good cache explicitly marked degraded |
 | SQL injection | Parameterized SQLite statements; no user-provided SQL |
 | Partial state | Transactional run and decision persistence |
@@ -46,4 +46,3 @@ Untrusted inputs:
 The included HTTP server binds only to `127.0.0.1` and is a demonstration server. For shared deployment, use an authenticated reverse proxy with TLS, request limits, security headers and authorization around reports and raw model inputs.
 
 The audit chain is tamper-evident only while a trusted checkpoint is retained. An attacker with full database write access could rebuild the chain. Production deployment should sign and export periodic checkpoints to immutable storage.
-

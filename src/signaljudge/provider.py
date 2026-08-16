@@ -1,4 +1,4 @@
-"""Hardened live provider adapter with quota-aware caching and bounded retries."""
+"""Hardened The Odds API V4 adapter with schema normalization and bounded retries."""
 
 from __future__ import annotations
 
@@ -10,18 +10,76 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional
 
 from signaljudge.io import atomic_write_json, load_json
 from signaljudge.models import ValidationError
 
 
-API_BASE_URL = "https://api.theoddsapi.com"
+API_BASE_URL = "https://api.the-odds-api.com/v4"
 ALLOWED_SPORTS = {
     "baseball_mlb",
     "basketball_nba",
 }
-SECRET_HEADER = "x-api-key"
+
+
+def _normalize_v4_payload(
+    payload: Any, fetched_at: str, response_headers: Mapping[str, str]
+) -> Dict[str, Any]:
+    """Convert the provider's nested V4 schema into SignalJudge's stable contract."""
+    if not isinstance(payload, list) or len(payload) > 5000:
+        raise ValidationError("odds provider response must be a bounded event list")
+    events: List[Dict[str, Any]] = []
+    for event in payload:
+        if not isinstance(event, dict):
+            raise ValidationError("odds provider returned a non-object event")
+        books: List[Dict[str, Any]] = []
+        bookmakers = event.get("bookmakers", [])
+        if not isinstance(bookmakers, list) or len(bookmakers) > 250:
+            raise ValidationError("odds provider returned invalid bookmakers")
+        for bookmaker in bookmakers:
+            if not isinstance(bookmaker, dict):
+                continue
+            markets = bookmaker.get("markets", [])
+            if not isinstance(markets, list):
+                continue
+            for market in markets:
+                if not isinstance(market, dict) or market.get("key") != "h2h":
+                    continue
+                books.append(
+                    {
+                        "book": bookmaker.get("key"),
+                        "market": "h2h",
+                        "updated_at": market.get("last_update")
+                        or bookmaker.get("last_update"),
+                        "outcomes": market.get("outcomes"),
+                    }
+                )
+                break
+        events.append(
+            {
+                "event_id": event.get("id"),
+                "sport_key": event.get("sport_key"),
+                "league": event.get("sport_title"),
+                "home_team": event.get("home_team"),
+                "away_team": event.get("away_team"),
+                "start_time": event.get("commence_time"),
+                "books": books,
+            }
+        )
+    return {
+        "success": True,
+        "source": "the-odds-api-v4",
+        "odds_format": "decimal",
+        "fetched_at": fetched_at,
+        "quota": {
+            "remaining": response_headers.get("x-requests-remaining"),
+            "used": response_headers.get("x-requests-used"),
+            "last_cost": response_headers.get("x-requests-last"),
+        },
+        "data": events,
+    }
 
 
 class LiveOddsProvider:
@@ -38,15 +96,20 @@ class LiveOddsProvider:
         key = (api_key or os.getenv("THE_ODDS_API_KEY", "")).strip()
         if not key or len(key) > 512:
             raise ValidationError("THE_ODDS_API_KEY is missing or invalid")
+        # V4 requires apiKey in the query string. Never log request URLs or chain
+        # HTTPError objects, because either could disclose the credential.
         query = urllib.parse.urlencode(
-            {"sport_key": sport_key, "markets": "h2h", "oddsFormat": "decimal"}
+            {
+                "apiKey": key,
+                "regions": "us",
+                "markets": "h2h",
+                "oddsFormat": "decimal",
+                "dateFormat": "iso",
+            }
         )
-        url = f"{API_BASE_URL}/odds/?{query}"
+        url = f"{API_BASE_URL}/sports/{sport_key}/odds/?{query}"
         cache_path = self.cache_dir / f"{sport_key}.json"
-        etag_path = self.cache_dir / f"{sport_key}.etag"
-        headers = {SECRET_HEADER: key, "Accept": "application/json", "User-Agent": "SignalJudge/1.0"}
-        if etag_path.is_file():
-            headers["If-None-Match"] = etag_path.read_text(encoding="utf-8").strip()
+        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.0"}
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):
@@ -58,29 +121,22 @@ class LiveOddsProvider:
                     body = response.read(5 * 1024 * 1024 + 1)
                     if len(body) > 5 * 1024 * 1024:
                         raise ValidationError("odds provider response exceeded size limit")
-                    payload = json.loads(body.decode("utf-8"))
-                    if not isinstance(payload, dict):
-                        raise ValidationError("odds provider response was not an object")
-                    from datetime import datetime, timezone
-
-                    payload["fetched_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    payload["odds_format"] = "decimal"
+                    provider_payload = json.loads(body.decode("utf-8"))
+                    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    payload = _normalize_v4_payload(provider_payload, timestamp, response.headers)
                     self.cache_dir.mkdir(parents=True, exist_ok=True)
                     atomic_write_json(cache_path, payload)
-                    etag = response.headers.get("ETag")
-                    if etag:
-                        etag_path.write_text(etag, encoding="utf-8")
                     return payload
             except urllib.error.HTTPError as exc:
-                if exc.code == 304 and cache_path.is_file():
-                    return load_json(cache_path)
                 if exc.code == 429 or exc.code in {502, 503, 504}:
                     last_error = exc
                     retry_after = exc.headers.get("Retry-After") if exc.headers else None
                     delay = float(retry_after) if retry_after and retry_after.isdigit() else 2**attempt
                     time.sleep(min(8.0, delay) + random.random() * 0.1)
                     continue
-                raise ValidationError(f"odds provider rejected the request with HTTP {exc.code}") from exc
+                raise ValidationError(
+                    f"odds provider rejected the request with HTTP {exc.code}"
+                ) from None
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = exc
                 if attempt + 1 < self.max_attempts:
@@ -91,5 +147,4 @@ class LiveOddsProvider:
             cached["degraded"] = True
             cached["degraded_reason"] = type(last_error).__name__ if last_error else "provider_failure"
             return cached
-        raise ValidationError("odds provider unavailable and no last-known-good cache exists")
-
+        raise ValidationError("odds provider unavailable and no last-known-good cache exists") from None

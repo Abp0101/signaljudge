@@ -67,7 +67,7 @@ Every run follows and records the same plan:
 LOAD → FETCH → VALIDATE → MATCH → COMPARE → DECIDE → PERSIST → RANK → REPORT
 ```
 
-The live provider can fall back to its last-known-good ETag cache after transient failure, but the payload is marked `degraded`; cached data is never silently described as live.
+The live provider can fall back to its last-known-good cache after transient failure, but the payload is marked `degraded`; cached data is never silently described as live.
 
 ## Decision rule
 
@@ -160,7 +160,7 @@ PYTHONPATH=src python3 -m signaljudge run \
 
 ## Live odds
 
-The adapter targets [The Odds API](https://theoddsapi.com/docs/) and sends the key in the `x-api-key` header, never in the URL or logs. Obtain a key, prepare an independent prediction file containing the provider's current event IDs, then run:
+The adapter targets [The Odds API V4](https://the-odds-api.com/liveapi/guides/v4/). V4 requires the key as an `apiKey` query parameter, so SignalJudge never logs request URLs or chains provider exceptions that could expose it. Obtain a key, prepare an independent prediction file containing the provider's current event IDs, then run:
 
 ```bash
 cp .env.example .env
@@ -172,7 +172,7 @@ PYTHONPATH=src python3 -m signaljudge live \
   --sport-key baseball_mlb
 ```
 
-The hostname and free-tier sport keys are allowlisted. Requests have response-size limits, timeouts, bounded exponential retry, `Retry-After` handling, ETag caching and last-known-good fallback.
+The hostname and supported sport keys are allowlisted. Requests have response-size limits, timeouts, bounded exponential retry, `Retry-After` handling, quota metadata and last-known-good fallback.
 
 ## State and auditability
 

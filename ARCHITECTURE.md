@@ -10,7 +10,7 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 
 | Component | Responsibility | Failure behaviour |
 |---|---|---|
-| Live provider | Secure request, ETag cache, retries | Last-known-good response marked degraded |
+| Live provider | Secure V4 request, schema adapter, quota tracking, retries | Last-known-good response marked degraded |
 | Input validator | Bounds and validates untrusted JSON | Rejects invalid record; never executes input |
 | Market normalizer | Converts odds, removes margin, rejects outliers | Event becomes a warning if no valid market remains |
 | Decision engine | Applies gates, weights, winner and rationale | Deterministic for the same versioned input |
@@ -88,4 +88,3 @@ At larger scale, preserve the pure normalizer and decision engine while changing
 4. publish signed audit checkpoints;
 5. precompute rankings by league while retaining per-decision lineage;
 6. monitor provider schema, staleness, source calibration and decision distribution.
-
