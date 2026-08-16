@@ -1,7 +1,9 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from signaljudge.models import Prediction
+from signaljudge.decision import reconcile
 from signaljudge.odds import implied_probability, normalize_market
 
 
@@ -80,6 +82,20 @@ class OddsTests(unittest.TestCase):
         latest = normalize_market(snapshot([0.42] * 5), prediction(), opening)
         self.assertAlmostEqual(latest.movement, -0.20, places=4)
         self.assertEqual(latest.movement_coherence, 1.0)
+
+    def test_abstains_when_market_is_stale_and_model_is_out_of_distribution(self):
+        model = replace(prediction(), out_of_distribution=True)
+        market = normalize_market(snapshot([0.55] * 5, "2026-08-16T14:00:00Z"), model)
+        decision = reconcile(
+            model,
+            market,
+            datetime(2026, 8, 16, 18, 0, tzinfo=timezone.utc),
+            model_rank=1,
+            market_rank=1,
+        )
+        self.assertEqual(decision.winner, "ABSTAIN")
+        self.assertEqual(decision.status, "ABSTAINED")
+        self.assertIsNone(decision.reconciled_probability)
 
 
 if __name__ == "__main__":

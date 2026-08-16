@@ -10,12 +10,12 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 
 | Component | Responsibility | Failure behaviour |
 |---|---|---|
-| Live provider | Secure V4 request, schema adapter, quota tracking, retries | Last-known-good response marked degraded |
+| Live provider | Secure V4 request, schema adapter, quota tracking, retries | Recent last-known-good response marked degraded; expired cache rejected |
 | Input validator | Bounds and validates untrusted JSON | Rejects invalid record; never executes input |
 | Market normalizer | Converts odds, removes margin, rejects outliers | Event becomes a warning if no valid market remains |
-| Decision engine | Applies gates, weights, winner and rationale | Deterministic for the same versioned input |
+| Decision engine | Applies gates, weights, winner, abstention and rationale | Deterministic for the same versioned input |
 | Orchestrator | Matches, compares, ranks and persists | Idempotent content hash prevents duplicate run |
-| SQLite store | Snapshots, revisions, audit chain, metrics | Transaction prevents partial run persistence |
+| SQLite store | Scoped snapshots, revisions, decision and run audit chains, metrics | Immediate transaction prevents partial or interleaved persistence |
 | Replay dashboard | Time state and counterfactual comparison | Static output remains viewable without services |
 
 ## Key decisions
@@ -75,8 +75,11 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 - Input files are limited to 5 MiB and 1,000 predictions.
 - Odds responses are limited to 5 MiB, 5,000 events and 250 books per event.
 - Run IDs derive from canonical input content for idempotency.
+- Canonical input includes all prediction fields, current and previous snapshots, context and policy configuration.
+- Previous state is scoped by sport, model version and market type; a new event does not require historical odds.
+- Unavailable markets and dual-source safety failures remain visible as unranked abstentions.
 - Decisions are stored transactionally and linked to prior event decisions.
-- Audit entries form a hash chain starting from `GENESIS`.
+- Decision and run-envelope audit entries form hash chains starting from `GENESIS`.
 
 ## Scaling path
 

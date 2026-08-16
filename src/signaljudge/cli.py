@@ -7,7 +7,9 @@ import functools
 import http.server
 import json
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -61,12 +63,16 @@ def _print_result(result: RunResult) -> None:
     print("-" * 112)
     print(f"{'#':>2}  {'Selection':<24} {'Model':>7} {'Market':>7} {'Final':>7} {'Winner':<7}  Rationale")
     print("-" * 112)
+    def probability(value: Optional[float]) -> str:
+        return "   —  " if value is None else f"{value:>6.1%}"
+
     for item in result.decisions:
         rationale = item.rationale if len(item.rationale) <= 52 else item.rationale[:49] + "..."
+        rank = "—" if item.final_rank is None else str(item.final_rank)
         print(
-            f"{item.final_rank:>2}  {item.selection[:24]:<24} "
-            f"{item.model_probability:>6.1%} {item.market_probability:>6.1%} "
-            f"{item.reconciled_probability:>6.1%} {item.winner:<7}  {rationale}"
+            f"{rank:>2}  {item.selection[:24]:<24} "
+            f"{probability(item.model_probability)} {probability(item.market_probability)} "
+            f"{probability(item.reconciled_probability)} {item.winner:<7}  {rationale}"
         )
     if result.warnings:
         print("\nWarnings:")
@@ -84,6 +90,14 @@ def _result_payload(result: RunResult):
         "warnings": result.warnings,
         "decisions": [item.as_dict() for item in result.decisions],
     }
+
+
+def _result_exit_code(result: RunResult, audit_valid: bool = True) -> int:
+    if not audit_valid:
+        return 4
+    if not any(item.status == "RECONCILED" for item in result.decisions):
+        return 3
+    return 0
 
 
 def command_demo(args: argparse.Namespace) -> int:
@@ -124,7 +138,7 @@ def command_demo(args: argparse.Namespace) -> int:
     print(f"Dashboard: {output_dir / 'report.html'}")
     if args.serve:
         serve_report(output_dir / "report.html", args.port)
-    return 0
+    return _result_exit_code(latest, audit_valid)
 
 
 def command_run(args: argparse.Namespace) -> int:
@@ -137,7 +151,7 @@ def command_run(args: argparse.Namespace) -> int:
     _print_result(result)
     atomic_write_json(Path(args.output).resolve(), _result_payload(result))
     print(f"Audit chain: {'VALID' if audit_valid else 'INVALID'} ({entries} entries)")
-    return 0
+    return _result_exit_code(result, audit_valid)
 
 
 def command_live(args: argparse.Namespace) -> int:
@@ -146,9 +160,11 @@ def command_live(args: argparse.Namespace) -> int:
     snapshot = provider.fetch(args.sport_key)
     with StateStore(Path(args.db).resolve()) as store:
         result = ReconciliationService(store).run(predictions, snapshot, mode="live")
+        audit_valid, entries = store.verify_audit_chain()
     _print_result(result)
     atomic_write_json(Path(args.output).resolve(), _result_payload(result))
-    return 0
+    print(f"Audit chain: {'VALID' if audit_valid else 'INVALID'} ({entries} entries)")
+    return _result_exit_code(result, audit_valid)
 
 
 def serve_report(report: Path, port: int) -> None:
@@ -157,15 +173,18 @@ def serve_report(report: Path, port: int) -> None:
         raise ValidationError(f"report not found: {report}")
     if not 1024 <= port <= 65535:
         raise ValidationError("port must be between 1024 and 65535")
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(report.parent))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
-    print(f"Serving dashboard at http://127.0.0.1:{port}/{report.name} (Ctrl-C to stop)")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        server.server_close()
+    with tempfile.TemporaryDirectory(prefix="signaljudge-report-") as directory:
+        isolated_report = Path(directory) / report.name
+        shutil.copy2(report, isolated_report)
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+        print(f"Serving dashboard at http://127.0.0.1:{port}/{report.name} (Ctrl-C to stop)")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopped.")
+        finally:
+            server.server_close()
 
 
 def command_serve(args: argparse.Namespace) -> int:

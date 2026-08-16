@@ -12,11 +12,13 @@ from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp
 
 @dataclass(frozen=True)
 class DecisionConfig:
+    policy_version: str = "2.0"
     material_probability_gap: float = 0.10
     material_rank_delta: int = 3
     coherent_movement_threshold: float = 0.08
     coherent_book_fraction: float = 0.60
     minimum_books: int = 2
+    minimum_source_reliability: float = 0.25
 
 
 def model_reliability(prediction: Prediction, as_of: datetime) -> float:
@@ -44,10 +46,49 @@ def _human_rationale(codes: List[str], winner: str) -> str:
         "MODEL_HIGHER_RELIABILITY": "the calibrated model has the stronger reliability score",
         "MARKET_HIGHER_RELIABILITY": "the fresh cross-book consensus has the stronger reliability score",
         "INSUFFICIENT_MARKET_COVERAGE": "too few valid bookmakers support the market signal",
+        "MARKET_SOURCE_DEGRADED": "the provider is using degraded cached market data",
+        "MARKET_UNAVAILABLE": "no valid matching market evidence is available",
+        "BOTH_SOURCES_UNRELIABLE": "neither source meets the minimum reliability policy",
         "SOURCES_BROADLY_AGREE": "the two probability estimates broadly agree",
     }
     details = "; ".join(explanations[code] for code in codes if code in explanations)
+    if winner == "ABSTAIN":
+        return f"Abstained because {details}."
     return f"{winner.title()} won because {details}."
+
+
+def unresolved_decision(
+    prediction: Prediction,
+    as_of: datetime,
+    model_rank: int,
+    reason: str,
+    previous: Optional[Decision] = None,
+) -> Decision:
+    codes = ["MARKET_UNAVAILABLE"]
+    return Decision(
+        event_id=prediction.event_id,
+        selection=prediction.selection,
+        model_probability=prediction.model_probability,
+        market_probability=None,
+        reconciled_probability=None,
+        model_reliability=model_reliability(prediction, as_of),
+        market_reliability=0.0,
+        model_weight=0.0,
+        market_weight=0.0,
+        winner="ABSTAIN",
+        decision_confidence=0.0,
+        material_conflict=False,
+        model_rank=model_rank,
+        market_rank=None,
+        rank_delta=None,
+        movement=0.0,
+        movement_coherence=0.0,
+        reason_codes=codes,
+        rationale=f"Abstained because no valid matching market evidence is available: {reason}.",
+        status="UNRESOLVED",
+        previous_probability=previous.reconciled_probability if previous else None,
+        previous_winner=previous.winner if previous else None,
+    )
 
 
 def reconcile(
@@ -74,17 +115,31 @@ def reconcile(
         codes.append("MATERIAL_RANK_GAP")
     if market.rejected_books:
         codes.append("MARKET_OUTLIERS_REMOVED")
+    if market.source_degraded:
+        codes.append("MARKET_SOURCE_DEGRADED")
 
     forced_winner: Optional[str] = None
+    market_unusable = market.valid_book_count < config.minimum_books or market.stale
+    model_unusable = prediction.out_of_distribution
     if market.valid_book_count < config.minimum_books:
-        forced_winner = "MODEL"
         codes.append("INSUFFICIENT_MARKET_COVERAGE")
+    if market.stale:
+        codes.append("MARKET_STALE")
+    if prediction.out_of_distribution:
+        codes.append("MODEL_OUT_OF_DISTRIBUTION")
+
+    if (market_unusable and model_unusable) or (
+        model_score < config.minimum_source_reliability
+        and market_score < config.minimum_source_reliability
+    ):
+        forced_winner = "ABSTAIN"
+        codes.append("BOTH_SOURCES_UNRELIABLE")
+    elif market.valid_book_count < config.minimum_books:
+        forced_winner = "MODEL"
     elif market.stale:
         forced_winner = "MODEL"
-        codes.append("MARKET_STALE")
     elif prediction.out_of_distribution:
         forced_winner = "MARKET"
-        codes.append("MODEL_OUT_OF_DISTRIBUTION")
     elif (
         abs(market.movement) >= config.coherent_movement_threshold
         and market.movement_coherence >= config.coherent_book_fraction
@@ -92,6 +147,31 @@ def reconcile(
         forced_winner = "MARKET"
         codes.append("COHERENT_MARKET_MOVEMENT")
 
+    if forced_winner == "ABSTAIN":
+        return Decision(
+            event_id=prediction.event_id,
+            selection=prediction.selection,
+            model_probability=prediction.model_probability,
+            market_probability=market.probability,
+            reconciled_probability=None,
+            model_reliability=model_score,
+            market_reliability=market_score,
+            model_weight=0.0,
+            market_weight=0.0,
+            winner="ABSTAIN",
+            decision_confidence=0.0,
+            material_conflict=material,
+            model_rank=model_rank,
+            market_rank=market_rank,
+            rank_delta=rank_delta,
+            movement=market.movement,
+            movement_coherence=market.movement_coherence,
+            reason_codes=codes,
+            rationale=_human_rationale(codes, "ABSTAIN"),
+            status="ABSTAINED",
+            previous_probability=previous.reconciled_probability if previous else None,
+            previous_winner=previous.winner if previous else None,
+        )
     if forced_winner == "MODEL":
         model_weight *= 2.25
         market_weight *= 0.40

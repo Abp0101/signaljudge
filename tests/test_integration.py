@@ -1,6 +1,8 @@
+import copy
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from signaljudge.evaluation import evaluate
@@ -65,6 +67,92 @@ class EndToEndTests(unittest.TestCase):
                 valid, count = store.verify_audit_chain()
                 self.assertTrue(valid)
                 self.assertEqual(count, 8)
+
+    def test_new_event_is_reconciled_without_previous_market(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prediction = load_predictions(DEMO / "model_predictions.json")[0]
+            snapshot = load_json(DEMO / "odds_opening.json")
+            event = next(item for item in snapshot["data"] if item["event_id"] == prediction.event_id)
+            first_snapshot = {**snapshot, "data": [event]}
+            new_prediction = replace(prediction, event_id="brand-new-event")
+            new_event = copy.deepcopy(event)
+            new_event["event_id"] = new_prediction.event_id
+            second_snapshot = {
+                **snapshot,
+                "fetched_at": "2026-08-15T12:01:00Z",
+                "data": [new_event],
+            }
+            with StateStore(Path(directory) / "state.db") as store:
+                service = ReconciliationService(store)
+                service.run([prediction], first_snapshot, "live")
+                result = service.run([new_prediction], second_snapshot, "live")
+            self.assertEqual(len(result.decisions), 1)
+            self.assertEqual(result.decisions[0].event_id, "brand-new-event")
+            self.assertEqual(result.decisions[0].status, "RECONCILED")
+
+    def test_missing_market_is_audited_as_unresolved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prediction = load_predictions(DEMO / "model_predictions.json")[0]
+            snapshot = load_json(DEMO / "odds_opening.json")
+            snapshot["data"] = []
+            with StateStore(Path(directory) / "state.db") as store:
+                service = ReconciliationService(store)
+                result = service.run([prediction], snapshot, "live")
+                replay = service.run([prediction], snapshot, "live")
+                valid, count = store.verify_audit_chain()
+            self.assertEqual(len(result.decisions), 1)
+            self.assertEqual(result.decisions[0].winner, "ABSTAIN")
+            self.assertEqual(result.decisions[0].status, "UNRESOLVED")
+            self.assertIsNone(result.decisions[0].reconciled_probability)
+            self.assertTrue(replay.reused)
+            self.assertEqual(replay.warnings, result.warnings)
+            self.assertTrue(valid)
+            self.assertEqual(count, 1)
+
+    def test_decision_changing_prediction_fields_invalidate_idempotency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            predictions = load_predictions(DEMO / "model_predictions.json")
+            snapshot = load_json(DEMO / "odds_opening.json")
+            with StateStore(Path(directory) / "state.db") as store:
+                service = ReconciliationService(store)
+                first = service.run(predictions, snapshot, "fixture")
+                changed = list(predictions)
+                changed[0] = replace(
+                    changed[0], historical_accuracy=0.51, calibration_error=0.30
+                )
+                second = service.run(changed, snapshot, "fixture")
+            self.assertNotEqual(first.run_id, second.run_id)
+            self.assertFalse(second.reused)
+
+    def test_raw_snapshot_tampering_breaks_run_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            predictions = load_predictions(DEMO / "model_predictions.json")
+            snapshot = load_json(DEMO / "odds_opening.json")
+            with StateStore(Path(directory) / "state.db") as store:
+                result = ReconciliationService(store).run(predictions, snapshot, "fixture")
+                store.connection.execute(
+                    "UPDATE runs SET raw_snapshot_json = ? WHERE run_id = ?",
+                    ('{"tampered":true}', result.run_id),
+                )
+                store.connection.commit()
+                valid, _ = store.verify_audit_chain()
+            self.assertFalse(valid)
+            with StateStore(Path(directory) / "state.db") as reopened:
+                still_invalid, _ = reopened.verify_audit_chain()
+            self.assertFalse(still_invalid)
+
+    def test_denormalized_ranking_tampering_breaks_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            predictions = load_predictions(DEMO / "model_predictions.json")
+            snapshot = load_json(DEMO / "odds_opening.json")
+            with StateStore(Path(directory) / "state.db") as store:
+                ReconciliationService(store).run(predictions, snapshot, "fixture")
+                store.connection.execute(
+                    "UPDATE decisions SET final_rank = 99 WHERE decision_id = 1"
+                )
+                store.connection.commit()
+                valid, _ = store.verify_audit_chain()
+            self.assertFalse(valid)
 
 
 if __name__ == "__main__":

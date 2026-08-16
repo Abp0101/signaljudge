@@ -91,6 +91,9 @@ class Prediction:
             raise ValidationError("historical_sample_size is outside the allowed range")
         if not 0.0 <= calibration_error <= 0.5:
             raise ValidationError("calibration_error must be between 0 and 0.5")
+        out_of_distribution = data.get("out_of_distribution", False)
+        if not isinstance(out_of_distribution, bool):
+            raise ValidationError("out_of_distribution must be a boolean")
         prediction = cls(
             event_id=require_id(data.get("event_id"), "event_id"),
             sport_key=require_id(data.get("sport_key"), "sport_key"),
@@ -104,10 +107,14 @@ class Prediction:
             calibration_error=calibration_error,
             generated_at=parse_datetime(data.get("generated_at"), "generated_at"),
             model_version=require_id(data.get("model_version"), "model_version"),
-            out_of_distribution=bool(data.get("out_of_distribution", False)),
+            out_of_distribution=out_of_distribution,
         )
         if prediction.selection not in {prediction.home_team, prediction.away_team}:
             raise ValidationError("selection must exactly match home_team or away_team")
+        if prediction.home_team == prediction.away_team:
+            raise ValidationError("home_team and away_team must be different")
+        if prediction.generated_at > prediction.commence_time:
+            raise ValidationError("generated_at must not be after commence_time")
         return prediction
 
 
@@ -133,6 +140,9 @@ class NormalizedMarket:
     per_book: Dict[str, float]
     movement: float = 0.0
     movement_coherence: float = 0.0
+    source_degraded: bool = False
+    data_origin: str = "LIVE"
+    cache_age_seconds: float = 0.0
 
 
 @dataclass
@@ -140,8 +150,8 @@ class Decision:
     event_id: str
     selection: str
     model_probability: float
-    market_probability: float
-    reconciled_probability: float
+    market_probability: Optional[float]
+    reconciled_probability: Optional[float]
     model_reliability: float
     market_reliability: float
     model_weight: float
@@ -149,15 +159,15 @@ class Decision:
     winner: str
     decision_confidence: float
     material_conflict: bool
-    model_rank: int
-    market_rank: int
-    rank_delta: int
+    model_rank: Optional[int]
+    market_rank: Optional[int]
+    rank_delta: Optional[int]
     movement: float
     movement_coherence: float
     reason_codes: List[str]
     rationale: str
     status: str = "RECONCILED"
-    final_rank: int = 0
+    final_rank: Optional[int] = None
     previous_probability: Optional[float] = None
     previous_winner: Optional[str] = None
     decision_id: Optional[int] = None
@@ -178,4 +188,3 @@ class RunResult:
     source_counts: Dict[str, int]
     reused: bool = False
     warnings: List[str] = field(default_factory=list)
-

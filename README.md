@@ -2,7 +2,7 @@
 
 **Auditable reconciliation when a sports model and the live market disagree.**
 
-SignalJudge takes independently produced sports predictions, fetches or loads bookmaker odds for the same events, removes bookmaker margin, measures the quality of both signals, explicitly chooses `MODEL` or `MARKET` for every matched event, and emits a reconciled ranking with a tamper-evident audit trail.
+SignalJudge takes independently produced sports predictions, fetches or loads bookmaker odds for the same events, removes bookmaker margin, measures the quality of both signals, explicitly chooses `MODEL`, `MARKET`, or a safety-first `ABSTAIN`, and emits a reconciled ranking with a tamper-evident audit trail.
 
 It is deliberately deterministic: the numerical decision is reproducible, testable, and never delegated to an LLM.
 
@@ -67,7 +67,7 @@ Every run follows and records the same plan:
 LOAD → FETCH → VALIDATE → MATCH → COMPARE → DECIDE → PERSIST → RANK → REPORT
 ```
 
-The live provider can fall back to its last-known-good cache after transient failure, but the payload is marked `degraded`; cached data is never silently described as live.
+The live provider can fall back to its last-known-good cache after transient failure, but only for 15 minutes by default. Cached payloads are marked `degraded`, evaluated against the current time, and never silently described as live.
 
 ## Decision rule
 
@@ -103,6 +103,8 @@ Safety gates take precedence when:
 - too few valid books or stale prices make the market unreliable;
 - the model marks an event out of distribution; or
 - a material movement occurs coherently across at least 60% of common books.
+
+If the model and market are both outside their safe operating conditions, SignalJudge abstains instead of forcing a misleading winner. A missing or invalid market also produces an explicit `UNRESOLVED` audit record rather than silently dropping the prediction.
 
 The winner is always explicit even though the final probability retains discounted information from the losing source. `decision_confidence` describes confidence in the source choice; it is intentionally separate from the predicted outcome probability.
 
@@ -158,6 +160,8 @@ PYTHONPATH=src python3 -m signaljudge run \
   --previous-odds path/to/previous-odds.json
 ```
 
+CLI exit code `3` means no prediction could be safely reconciled; exit code `4` means audit verification failed. The JSON output is still written so operators can inspect every abstention and rationale.
+
 ## Live odds
 
 The adapter targets [The Odds API V4](https://the-odds-api.com/liveapi/guides/v4/). V4 requires the key as an `apiKey` query parameter, so SignalJudge never logs request URLs or chains provider exceptions that could expose it. Obtain a key, prepare an independent prediction file containing the provider's current event IDs, then run:
@@ -176,7 +180,7 @@ The hostname and supported sport keys are allowlisted. Requests have response-si
 
 ## State and auditability
 
-SQLite stores runs, raw snapshots, decisions, source metrics and links between revisions. Processing identical input is idempotent.
+SQLite stores runs, raw snapshots, decisions, source metrics and links between revisions. State is scoped by sport, model version and market type. Processing identical complete input is idempotent; the hash includes every prediction field, current and previous snapshots, mode, policy version and configuration.
 
 Decisions are append-only. Each audit hash is:
 
@@ -184,7 +188,7 @@ Decisions are append-only. Each audit hash is:
 SHA-256(previous audit hash + canonical decision JSON)
 ```
 
-Changing or reordering a stored decision breaks verification. This is tamper-evident, not a substitute for signatures or access-controlled immutable storage.
+Decision hashes are summarized by a second run-level chain covering raw snapshot evidence, warnings, run status, configuration-derived content hash and ordered decisions. Changing source evidence, a decision or run metadata breaks verification. This is tamper-evident, not a substitute for signatures or access-controlled immutable storage.
 
 ## Tests
 
@@ -203,6 +207,12 @@ The suite covers:
 - both explicit source winners;
 - state revision and idempotency;
 - audit-chain verification;
+- run-envelope verification, including raw-snapshot tampering;
+- safe abstention and explicit unresolved predictions;
+- rolling batches containing previously unseen events;
+- stale-cache rejection and live/cache provenance;
+- dashboard script-injection resistance;
+- migration from the original SQLite schema;
 - objective correction of model-only and market-only failures.
 
 CI runs the suite and full demo on Python 3.9 and 3.12.

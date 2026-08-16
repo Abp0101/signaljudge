@@ -57,6 +57,18 @@ def atomic_write_json(path: Path, payload: Any) -> None:
             os.unlink(temporary)
 
 
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def load_results(path: Path) -> Dict[str, str]:
     payload = load_json(path)
     rows = payload.get("results") if isinstance(payload, dict) else None
@@ -71,4 +83,3 @@ def load_results(path: Path) -> Dict[str, str]:
             raise ValidationError("result records must include winner")
         results[row["event_id"]] = winner.strip()
     return results
-

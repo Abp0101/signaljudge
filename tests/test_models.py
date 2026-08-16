@@ -40,7 +40,16 @@ class PredictionValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Prediction.from_dict(data)
 
+    def test_rejects_string_boolean(self):
+        data = dict(VALID, out_of_distribution="false")
+        with self.assertRaises(ValidationError):
+            Prediction.from_dict(data)
+
+    def test_rejects_prediction_generated_after_event(self):
+        data = dict(VALID, generated_at="2026-08-16T21:00:00Z")
+        with self.assertRaises(ValidationError):
+            Prediction.from_dict(data)
+
 
 if __name__ == "__main__":
     unittest.main()
-

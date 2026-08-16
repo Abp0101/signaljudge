@@ -52,6 +52,12 @@ def fetched_at(snapshot: Mapping[str, Any]):
     return parse_datetime(snapshot.get("fetched_at"), "odds.fetched_at")
 
 
+def evaluated_at(snapshot: Mapping[str, Any]):
+    return parse_datetime(
+        snapshot.get("evaluated_at") or snapshot.get("fetched_at"), "odds.evaluated_at"
+    )
+
+
 def validate_event_identity(prediction: Prediction, event: Mapping[str, Any]) -> None:
     home = require_text(event.get("home_team"), "odds.home_team")
     away = require_text(event.get("away_team"), "odds.away_team")
@@ -83,9 +89,11 @@ def _book_probabilities(
         book_name = require_id(book.get("book") or book.get("key"), "book")
         if book_name in seen:
             continue
-        seen.add(book_name)
         updated = parse_datetime(book.get("updated_at") or book.get("last_update"), "book.updated_at")
-        age = max(0.0, (snapshot_time - updated).total_seconds())
+        clock_delta = (snapshot_time - updated).total_seconds()
+        if clock_delta < -5 * 60:
+            continue
+        age = max(0.0, clock_delta)
         outcomes = book.get("outcomes")
         if not isinstance(outcomes, list) or not 2 <= len(outcomes) <= 3:
             continue
@@ -104,6 +112,7 @@ def _book_probabilities(
         if not 0.8 <= overround <= 1.4:
             continue
         probabilities.append((book_name, raw[prediction.selection] / overround, age))
+        seen.add(book_name)
     return probabilities, len(books)
 
 
@@ -120,14 +129,17 @@ def _reject_outliers(rows: List[Tuple[str, float, float]]):
 
 
 def normalize_market(
-    snapshot: Mapping[str, Any], prediction: Prediction, previous: Optional[NormalizedMarket] = None
+    snapshot: Mapping[str, Any],
+    prediction: Prediction,
+    previous: Optional[NormalizedMarket] = None,
+    event_index: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> NormalizedMarket:
-    events = _event_index(snapshot)
+    events = event_index if event_index is not None else _event_index(snapshot)
     event = events.get(prediction.event_id)
     if event is None:
         raise ValidationError(f"no live odds matched prediction {prediction.event_id}")
     validate_event_identity(prediction, event)
-    snapshot_time = fetched_at(snapshot)
+    snapshot_time = evaluated_at(snapshot)
     odds_format = snapshot.get("odds_format", "decimal")
     if odds_format not in {"decimal", "american"}:
         raise ValidationError("odds_format must be decimal or american")
@@ -144,7 +156,13 @@ def normalize_market(
     freshness = statistics.mean([0.5 ** (age / 900.0) for age in ages])
     dispersion_quality = max(0.0, 1.0 - dispersion / 0.12)
     outlier_penalty = max(0.6, 1.0 - len(rejected) / max(1.0, len(rows) * 2.0))
-    quality = clamp((0.45 * coverage + 0.30 * freshness + 0.25 * dispersion_quality) * outlier_penalty)
+    source_degraded = snapshot.get("degraded") is True
+    degraded_penalty = 0.65 if source_degraded else 1.0
+    quality = clamp(
+        (0.45 * coverage + 0.30 * freshness + 0.25 * dispersion_quality)
+        * outlier_penalty
+        * degraded_penalty
+    )
     per_book = {row[0]: row[1] for row in kept}
 
     movement = 0.0
@@ -161,6 +179,11 @@ def normalize_market(
             coherent = sum(1 for delta in common_deltas if direction * delta >= 0.01)
             coherence = coherent / len(common_deltas)
 
+    try:
+        cache_age_seconds = max(0.0, float(snapshot.get("cache_age_seconds", 0.0)))
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("cache_age_seconds must be numeric") from exc
+
     return NormalizedMarket(
         event_id=prediction.event_id,
         selection=prediction.selection,
@@ -175,6 +198,9 @@ def normalize_market(
         per_book=per_book,
         movement=movement,
         movement_coherence=coherence,
+        source_degraded=source_degraded,
+        data_origin=str(snapshot.get("data_origin", "FIXTURE")),
+        cache_age_seconds=cache_age_seconds,
     )
 
 
@@ -183,17 +209,46 @@ def normalize_all(
     predictions: List[Prediction],
     previous_snapshot: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Dict[str, NormalizedMarket], List[str]]:
-    markets: Dict[str, NormalizedMarket] = {}
-    warnings: List[str] = []
-    for prediction in predictions:
-        try:
-            previous = (
-                normalize_market(previous_snapshot, prediction)
-                if previous_snapshot is not None
-                else None
-            )
-            markets[prediction.event_id] = normalize_market(snapshot, prediction, previous)
-        except ValidationError as exc:
-            warnings.append(str(exc))
+    markets, warnings, _ = normalize_all_detailed(snapshot, predictions, previous_snapshot)
     return markets, warnings
 
+
+def normalize_all_detailed(
+    snapshot: Mapping[str, Any],
+    predictions: List[Prediction],
+    previous_snapshot: Optional[Mapping[str, Any]] = None,
+) -> Tuple[Dict[str, NormalizedMarket], List[str], Dict[str, str]]:
+    markets: Dict[str, NormalizedMarket] = {}
+    warnings: List[str] = []
+    errors: Dict[str, str] = {}
+    current_events = _event_index(snapshot)
+    previous_events: Optional[Dict[str, Mapping[str, Any]]] = None
+    use_previous = previous_snapshot is not None
+    if previous_snapshot is not None:
+        try:
+            if evaluated_at(previous_snapshot) >= evaluated_at(snapshot):
+                warnings.append("previous odds snapshot was not older than the current snapshot; movement ignored")
+                use_previous = False
+            else:
+                previous_events = _event_index(previous_snapshot)
+        except ValidationError as exc:
+            warnings.append(f"previous odds snapshot ignored: {exc}")
+            use_previous = False
+    for prediction in predictions:
+        previous = None
+        if use_previous and previous_events is not None and prediction.event_id in previous_events:
+            try:
+                previous = normalize_market(
+                    previous_snapshot, prediction, event_index=previous_events  # type: ignore[arg-type]
+                )
+            except ValidationError as exc:
+                warnings.append(f"previous market ignored for {prediction.event_id}: {exc}")
+        try:
+            markets[prediction.event_id] = normalize_market(
+                snapshot, prediction, previous, event_index=current_events
+            )
+        except ValidationError as exc:
+            message = str(exc)
+            warnings.append(message)
+            errors[prediction.event_id] = message
+    return markets, warnings, errors

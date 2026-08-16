@@ -11,6 +11,8 @@ from signaljudge.models import Decision
 def _score(probabilities: List[float], outcomes: List[int]) -> Dict[str, float]:
     if not probabilities:
         raise ValueError("at least one settled event is required")
+    if len(probabilities) != len(outcomes):
+        raise ValueError("probabilities and outcomes must have equal length")
     clipped = [max(1e-6, min(1 - 1e-6, value)) for value in probabilities]
     count = len(clipped)
     brier = sum((p - y) ** 2 for p, y in zip(clipped, outcomes)) / count
@@ -26,7 +28,12 @@ def evaluate(
     outcomes: List[int] = []
     cases: List[Dict[str, object]] = []
     for decision in decisions:
-        if decision.event_id not in results:
+        if (
+            decision.event_id not in results
+            or decision.status != "RECONCILED"
+            or decision.market_probability is None
+            or decision.reconciled_probability is None
+        ):
             continue
         outcome = 1 if results[decision.event_id] == decision.selection else 0
         outcomes.append(outcome)
@@ -51,4 +58,3 @@ def evaluate(
         )
     metrics = {source: _score(values, outcomes) for source, values in probabilities.items()}
     return metrics, cases
-

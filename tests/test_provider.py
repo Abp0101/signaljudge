@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.error import URLError
 
 from signaljudge.models import ValidationError
 from signaljudge.provider import API_BASE_URL, LiveOddsProvider
@@ -96,6 +97,46 @@ class ProviderSecurityTests(unittest.TestCase):
             provider = LiveOddsProvider(Path(directory))
             with self.assertRaises(ValidationError):
                 provider.fetch("baseball_mlb")
+
+    @patch("urllib.request.urlopen", return_value=FakeResponse())
+    def test_live_payload_records_provenance(self, _mocked_open):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = LiveOddsProvider(Path(directory)).fetch(
+                "baseball_mlb", api_key="a" * 32
+            )
+        self.assertEqual(payload["data_origin"], "LIVE")
+        self.assertEqual(payload["evaluated_at"], payload["fetched_at"])
+
+    def test_recent_cache_fallback_is_explicitly_degraded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider = LiveOddsProvider(Path(directory), max_attempts=1, max_cache_age_seconds=3600)
+            with patch("urllib.request.urlopen", return_value=FakeResponse()):
+                provider.fetch("baseball_mlb", api_key="a" * 32)
+            with patch("urllib.request.urlopen", side_effect=URLError("offline")):
+                cached = provider.fetch("baseball_mlb", api_key="a" * 32)
+        self.assertTrue(cached["degraded"])
+        self.assertEqual(cached["data_origin"], "CACHE")
+        self.assertGreaterEqual(cached["cache_age_seconds"], 0)
+
+    def test_expired_cache_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_dir = Path(directory)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            (cache_dir / "baseball_mlb.json").write_text(
+                json.dumps(
+                    {
+                        "success": True,
+                        "fetched_at": "2000-01-01T00:00:00Z",
+                        "odds_format": "decimal",
+                        "data": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provider = LiveOddsProvider(cache_dir, max_attempts=1, max_cache_age_seconds=60)
+            with patch("urllib.request.urlopen", side_effect=URLError("offline")):
+                with self.assertRaisesRegex(ValidationError, "cache is too old"):
+                    provider.fetch("baseball_mlb", api_key="a" * 32)
 
 
 if __name__ == "__main__":

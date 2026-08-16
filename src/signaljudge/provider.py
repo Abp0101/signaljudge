@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
 from signaljudge.io import atomic_write_json, load_json
-from signaljudge.models import ValidationError
+from signaljudge.models import ValidationError, isoformat, parse_datetime
 
 
 API_BASE_URL = "https://api.the-odds-api.com/v4"
@@ -73,6 +73,9 @@ def _normalize_v4_payload(
         "source": "the-odds-api-v4",
         "odds_format": "decimal",
         "fetched_at": fetched_at,
+        "evaluated_at": fetched_at,
+        "data_origin": "LIVE",
+        "cache_age_seconds": 0.0,
         "quota": {
             "remaining": response_headers.get("x-requests-remaining"),
             "used": response_headers.get("x-requests-used"),
@@ -83,10 +86,17 @@ def _normalize_v4_payload(
 
 
 class LiveOddsProvider:
-    def __init__(self, cache_dir: Path, timeout_seconds: float = 8.0, max_attempts: int = 4):
+    def __init__(
+        self,
+        cache_dir: Path,
+        timeout_seconds: float = 8.0,
+        max_attempts: int = 4,
+        max_cache_age_seconds: float = 15 * 60,
+    ):
         self.cache_dir = cache_dir
         self.timeout_seconds = min(30.0, max(1.0, timeout_seconds))
         self.max_attempts = min(5, max(1, max_attempts))
+        self.max_cache_age_seconds = min(60 * 60, max(0.0, max_cache_age_seconds))
 
     def fetch(self, sport_key: str, api_key: Optional[str] = None) -> Dict[str, Any]:
         if sport_key not in ALLOWED_SPORTS:
@@ -128,8 +138,10 @@ class LiveOddsProvider:
                     atomic_write_json(cache_path, payload)
                     return payload
             except urllib.error.HTTPError as exc:
-                if exc.code == 429 or exc.code in {502, 503, 504}:
+                if exc.code == 429 or 500 <= exc.code <= 504:
                     last_error = exc
+                    if attempt + 1 >= self.max_attempts:
+                        break
                     retry_after = exc.headers.get("Retry-After") if exc.headers else None
                     delay = float(retry_after) if retry_after and retry_after.isdigit() else 2**attempt
                     time.sleep(min(8.0, delay) + random.random() * 0.1)
@@ -144,7 +156,19 @@ class LiveOddsProvider:
                     continue
         if cache_path.is_file():
             cached = load_json(cache_path)
+            if not isinstance(cached, dict):
+                raise ValidationError("odds provider unavailable and cache is invalid") from None
+            now = datetime.now(timezone.utc)
+            cached_at = parse_datetime(cached.get("fetched_at"), "cache.fetched_at")
+            cache_age = max(0.0, (now - cached_at).total_seconds())
+            if cache_age > self.max_cache_age_seconds:
+                raise ValidationError(
+                    "odds provider unavailable and last-known-good cache is too old"
+                ) from None
             cached["degraded"] = True
             cached["degraded_reason"] = type(last_error).__name__ if last_error else "provider_failure"
+            cached["data_origin"] = "CACHE"
+            cached["evaluated_at"] = isoformat(now)
+            cached["cache_age_seconds"] = cache_age
             return cached
         raise ValidationError("odds provider unavailable and no last-known-good cache exists") from None
