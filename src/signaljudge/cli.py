@@ -20,8 +20,39 @@ from signaljudge.service import ReconciliationService
 from signaljudge.state import StateStore
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEMO_DIR = ROOT / "data" / "demo"
+DEMO_FILES = (
+    "model_predictions.json",
+    "odds_opening.json",
+    "odds_latest.json",
+    "results.json",
+)
+
+
+def resolve_demo_dir(
+    cwd: Optional[Path] = None, module_file: Optional[Path] = None
+) -> Path:
+    """Locate fixtures in a clone, source checkout, container, or explicit override."""
+    working_directory = (cwd or Path.cwd()).resolve()
+    source_file = (module_file or Path(__file__)).resolve()
+    candidates = []
+    override = os.getenv("SIGNALJUDGE_DEMO_DIR")
+    if override:
+        candidates.append(Path(override).expanduser().resolve())
+    candidates.extend(
+        [
+            working_directory / "data" / "demo",
+            source_file.parents[2] / "data" / "demo",
+            source_file.parent / "demo_data",
+        ]
+    )
+    for candidate in candidates:
+        if all((candidate / filename).is_file() for filename in DEMO_FILES):
+            return candidate
+    checked = ", ".join(str(candidate) for candidate in candidates)
+    raise ValidationError(
+        "demo fixtures were not found; run from the repository root or set "
+        f"SIGNALJUDGE_DEMO_DIR (checked: {checked})"
+    )
 
 
 def _print_result(result: RunResult) -> None:
@@ -58,10 +89,11 @@ def _result_payload(result: RunResult):
 def command_demo(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).resolve()
     db_path = Path(args.db).resolve()
-    predictions = load_predictions(DEMO_DIR / "model_predictions.json")
-    opening_snapshot = load_json(DEMO_DIR / "odds_opening.json")
-    latest_snapshot = load_json(DEMO_DIR / "odds_latest.json")
-    results = load_results(DEMO_DIR / "results.json")
+    demo_dir = resolve_demo_dir()
+    predictions = load_predictions(demo_dir / "model_predictions.json")
+    opening_snapshot = load_json(demo_dir / "odds_opening.json")
+    latest_snapshot = load_json(demo_dir / "odds_latest.json")
+    results = load_results(demo_dir / "results.json")
     with StateStore(db_path) as store:
         service = ReconciliationService(store)
         opening = service.run(predictions, opening_snapshot, mode="fixture-opening", previous_snapshot=None)
@@ -186,4 +218,3 @@ def main(argv: Optional[List[str]] = None) -> None:
     except ValidationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
-
