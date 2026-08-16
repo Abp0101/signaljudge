@@ -10,13 +10,15 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 
 | Component | Responsibility | Failure behaviour |
 |---|---|---|
-| Live provider | Secure V4 request, schema adapter, quota tracking, retries | Recent last-known-good response marked degraded; expired cache rejected |
+| Live provider | Secure V4 request, sport-aware region, schema adapter, quota tracking, retries | Recent last-known-good response marked degraded; expired cache rejected |
 | Input validator | Bounds and validates untrusted JSON | Rejects invalid record; never executes input |
 | Market normalizer | Converts odds, removes margin, rejects outliers | Event becomes a warning if no valid market remains |
 | Decision engine | Applies gates, weights, winner, abstention and rationale | Deterministic for the same versioned input |
 | Orchestrator | Matches, compares, ranks and persists | Idempotent content hash prevents duplicate run |
 | SQLite store | Scoped snapshots, revisions, decision and run audit chains, metrics | Immediate transaction prevents partial or interleaved persistence |
-| Replay dashboard | Time state and counterfactual comparison | Static output remains viewable without services |
+| Replay/live dashboard | Fixture identity, kickoff, probabilities, time state and counterfactual comparison | Static output remains viewable without services |
+| Local application API | Sport selection, fixture/prediction join, bounded refresh and browser view model | Missing predictions remain visible; invalid input fails closed |
+| Operator console | Sort/filter current fixtures and inspect complete rationale | Demo mode remains usable when live service is unavailable |
 
 ## Key decisions
 
@@ -68,12 +70,46 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 
 **Trade-off:** validation and the dashboard require more local code than Pydantic and a UI framework. Domain boundaries keep a future replacement straightforward.
 
+### Local application over a hosted service
+
+**Chosen:** a same-origin browser console backed by a standard-library server bound
+to `127.0.0.1`.
+
+**Why:** it adds a product-quality workflow without accounts, deployment credentials,
+or a new framework. The API key remains in the Python process and the existing core
+service stays the only reconciliation path.
+
+**Trade-off:** this is deliberately single-operator software. A shared deployment
+would require authenticated HTTPS, authorization, durable rate limiting, production
+observability, and a multi-writer database.
+
+## Application data flow
+
+```text
+Browser sport selection
+        -> allowlisted localhost API
+        -> quota-aware live provider
+        -> exact per-sport prediction adapter
+        -> existing ReconciliationService
+        -> SQLite state and audit verification
+        -> fixture view model
+        -> sort/filter in the browser
+```
+
+The server returns all provider fixtures, not only matched predictions. An unmatched
+fixture is an explicit `NO_PREDICTION` view state and never enters the ranked batch.
+Responses are held in memory for five minutes; a manual refresh has a 30-second
+cooldown. Provider last-known-good caching remains a separate, explicitly degraded
+reliability mechanism.
+
 ## Data integrity
 
 - All times must be timezone-aware and are converted to UTC.
 - Probability values must be finite and strictly between zero and one.
 - Input files are limited to 5 MiB and 1,000 predictions.
 - Odds responses are limited to 5 MiB, 5,000 events and 250 books per event.
+- Sport and bookmaker region are selected from fixed allowlists; EPL defaults to UK books.
+- Soccer head-to-head normalization removes margin across home, away and draw outcomes.
 - Run IDs derive from canonical input content for idempotency.
 - Canonical input includes all prediction fields, current and previous snapshots, context and policy configuration.
 - Previous state is scoped by sport, model version and market type; a new event does not require historical odds.

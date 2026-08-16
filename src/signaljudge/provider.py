@@ -18,14 +18,17 @@ from signaljudge.models import ValidationError, isoformat, parse_datetime
 
 
 API_BASE_URL = "https://api.the-odds-api.com/v4"
-ALLOWED_SPORTS = {
-    "baseball_mlb",
-    "basketball_nba",
+SPORT_CONFIGS = {
+    "baseball_mlb": {"default_region": "us", "title": "MLB"},
+    "basketball_nba": {"default_region": "us", "title": "NBA"},
+    "soccer_epl": {"default_region": "uk", "title": "English Premier League"},
 }
+ALLOWED_SPORTS = frozenset(SPORT_CONFIGS)
+ALLOWED_REGIONS = frozenset({"us", "uk", "eu", "au"})
 
 
 def _normalize_v4_payload(
-    payload: Any, fetched_at: str, response_headers: Mapping[str, str]
+    payload: Any, fetched_at: str, response_headers: Mapping[str, str], region: str
 ) -> Dict[str, Any]:
     """Convert the provider's nested V4 schema into SignalJudge's stable contract."""
     if not isinstance(payload, list) or len(payload) > 5000:
@@ -75,6 +78,7 @@ def _normalize_v4_payload(
         "fetched_at": fetched_at,
         "evaluated_at": fetched_at,
         "data_origin": "LIVE",
+        "region": region,
         "cache_age_seconds": 0.0,
         "quota": {
             "remaining": response_headers.get("x-requests-remaining"),
@@ -98,10 +102,17 @@ class LiveOddsProvider:
         self.max_attempts = min(5, max(1, max_attempts))
         self.max_cache_age_seconds = min(60 * 60, max(0.0, max_cache_age_seconds))
 
-    def fetch(self, sport_key: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    def fetch(
+        self, sport_key: str, api_key: Optional[str] = None, region: Optional[str] = None
+    ) -> Dict[str, Any]:
         if sport_key not in ALLOWED_SPORTS:
             raise ValidationError(
                 f"sport_key must be one of the free-tier allowlist: {', '.join(sorted(ALLOWED_SPORTS))}"
+            )
+        selected_region = region or str(SPORT_CONFIGS[sport_key]["default_region"])
+        if selected_region not in ALLOWED_REGIONS:
+            raise ValidationError(
+                f"region must be one of: {', '.join(sorted(ALLOWED_REGIONS))}"
             )
         key = (api_key or os.getenv("THE_ODDS_API_KEY", "")).strip()
         if not key or len(key) > 512:
@@ -111,15 +122,15 @@ class LiveOddsProvider:
         query = urllib.parse.urlencode(
             {
                 "apiKey": key,
-                "regions": "us",
+                "regions": selected_region,
                 "markets": "h2h",
                 "oddsFormat": "decimal",
                 "dateFormat": "iso",
             }
         )
         url = f"{API_BASE_URL}/sports/{sport_key}/odds/?{query}"
-        cache_path = self.cache_dir / f"{sport_key}.json"
-        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.0"}
+        cache_path = self.cache_dir / f"{sport_key}-{selected_region}.json"
+        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.3"}
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):
@@ -133,7 +144,9 @@ class LiveOddsProvider:
                         raise ValidationError("odds provider response exceeded size limit")
                     provider_payload = json.loads(body.decode("utf-8"))
                     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    payload = _normalize_v4_payload(provider_payload, timestamp, response.headers)
+                    payload = _normalize_v4_payload(
+                        provider_payload, timestamp, response.headers, selected_region
+                    )
                     self.cache_dir.mkdir(parents=True, exist_ok=True)
                     atomic_write_json(cache_path, payload)
                     return payload

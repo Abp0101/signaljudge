@@ -50,6 +50,11 @@ class PredictionValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Prediction.from_dict(data)
 
+    def test_soccer_prediction_can_select_draw(self):
+        data = dict(VALID, sport_key="soccer_epl", selection="Draw")
+        prediction = Prediction.from_dict(data)
+        self.assertEqual(prediction.selection, "Draw")
+
 
 if __name__ == "__main__":
     unittest.main()

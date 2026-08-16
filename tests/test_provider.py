@@ -68,6 +68,7 @@ class ProviderSecurityTests(unittest.TestCase):
         self.assertEqual(payload["data"][0]["event_id"], "event-123")
         self.assertEqual(payload["data"][0]["books"][0]["market"], "h2h")
         self.assertEqual(payload["quota"]["remaining"], "499")
+        self.assertIn("regions=us", request.full_url)
 
     @patch("urllib.request.urlopen")
     def test_http_errors_do_not_chain_secret_bearing_url(self, mocked_open):
@@ -91,6 +92,23 @@ class ProviderSecurityTests(unittest.TestCase):
             provider = LiveOddsProvider(Path(directory))
             with self.assertRaises(ValidationError):
                 provider.fetch("https://attacker.invalid", api_key="not-a-real-key")
+
+    @patch("urllib.request.urlopen", return_value=FakeResponse())
+    def test_epl_defaults_to_uk_bookmakers(self, mocked_open):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = LiveOddsProvider(Path(directory)).fetch(
+                "soccer_epl", api_key="a" * 32
+            )
+        request = mocked_open.call_args.args[0]
+        self.assertIn("/sports/soccer_epl/odds/", request.full_url)
+        self.assertIn("regions=uk", request.full_url)
+        self.assertEqual(payload["region"], "uk")
+
+    def test_rejects_non_allowlisted_region(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider = LiveOddsProvider(Path(directory))
+            with self.assertRaises(ValidationError):
+                provider.fetch("soccer_epl", api_key="a" * 32, region="attacker.invalid")
 
     def test_missing_secret_fails_before_network(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
@@ -122,7 +140,7 @@ class ProviderSecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cache_dir = Path(directory)
             cache_dir.mkdir(parents=True, exist_ok=True)
-            (cache_dir / "baseball_mlb.json").write_text(
+            (cache_dir / "baseball_mlb-us.json").write_text(
                 json.dumps(
                     {
                         "success": True,

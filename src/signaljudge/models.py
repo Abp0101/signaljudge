@@ -109,8 +109,13 @@ class Prediction:
             model_version=require_id(data.get("model_version"), "model_version"),
             out_of_distribution=out_of_distribution,
         )
-        if prediction.selection not in {prediction.home_team, prediction.away_team}:
-            raise ValidationError("selection must exactly match home_team or away_team")
+        valid_selections = {prediction.home_team, prediction.away_team}
+        if prediction.sport_key.startswith("soccer_"):
+            valid_selections.add("Draw")
+        if prediction.selection not in valid_selections:
+            raise ValidationError(
+                "selection must exactly match a team or Draw for a supported soccer market"
+            )
         if prediction.home_team == prediction.away_team:
             raise ValidationError("home_team and away_team must be different")
         if prediction.generated_at > prediction.commence_time:
@@ -166,6 +171,10 @@ class Decision:
     movement_coherence: float
     reason_codes: List[str]
     rationale: str
+    sport_key: str = ""
+    commence_time: str = ""
+    home_team: str = ""
+    away_team: str = ""
     status: str = "RECONCILED"
     final_rank: Optional[int] = None
     previous_probability: Optional[float] = None

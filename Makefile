@@ -1,9 +1,12 @@
-.PHONY: demo test check clean
+.PHONY: app demo test check clean
 
 PYTHON ?= python3
 
 demo:
 	PYTHONPATH=src $(PYTHON) -m signaljudge demo
+
+app:
+	PYTHONPATH=src $(PYTHON) -m signaljudge app --open
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v

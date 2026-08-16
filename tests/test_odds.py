@@ -97,6 +97,35 @@ class OddsTests(unittest.TestCase):
         self.assertEqual(decision.status, "ABSTAINED")
         self.assertIsNone(decision.reconciled_probability)
 
+    def test_normalizes_three_way_soccer_draw_market(self):
+        model = Prediction.from_dict(
+            {
+                "event_id": "event-1",
+                "sport_key": "soccer_epl",
+                "commence_time": "2026-08-16T20:00:00Z",
+                "home_team": "Home",
+                "away_team": "Away",
+                "selection": "Draw",
+                "model_probability": 0.28,
+                "historical_accuracy": 0.60,
+                "historical_sample_size": 200,
+                "calibration_error": 0.04,
+                "generated_at": "2026-08-16T10:00:00Z",
+                "model_version": "soccer-v1",
+            }
+        )
+        soccer_snapshot = snapshot([0.50] * 5)
+        soccer_snapshot["data"][0]["sport_key"] = "soccer_epl"
+        for book in soccer_snapshot["data"][0]["books"]:
+            book["outcomes"] = [
+                {"name": "Home", "price": 1 / (0.45 * 1.05)},
+                {"name": "Away", "price": 1 / (0.30 * 1.05)},
+                {"name": "Draw", "price": 1 / (0.25 * 1.05)},
+            ]
+        market = normalize_market(soccer_snapshot, model)
+        self.assertAlmostEqual(market.probability, 0.25, places=5)
+        self.assertEqual(market.valid_book_count, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

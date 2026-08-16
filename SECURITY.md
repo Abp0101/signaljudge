@@ -28,22 +28,31 @@ Untrusted inputs:
 
 | Threat | Control |
 |---|---|
-| Secret committed or logged | `.env` ignored; secret-bearing V4 request URLs are never logged or exception-chained; placeholder only in `.env.example` |
-| SSRF through configurable URL | Fixed HTTPS base URL and sport-key allowlist |
+| Secret committed or logged | `.env` ignored; app safely parses only the literal API-key assignment; secret-bearing V4 request URLs are never logged or exception-chained; placeholder only in `.env.example` |
+| SSRF through configurable URL | Fixed HTTPS base URL plus sport-key and bookmaker-region allowlists |
 | Malformed or oversized input | Strict types/ranges, identifier constraints, record and byte limits |
 | Unsafe deserialization | JSON only; no pickle, YAML object construction or dynamic imports |
 | Incorrect event reconciliation | Provider ID, exact team verification and bounded time check |
 | API quota exhaustion | One batch fetch per sport, usage-header tracking, bounded retries and `Retry-After` support |
+| Browser-triggered quota exhaustion | Same-origin custom request header, five-minute response cache and manual-refresh cooldown |
 | Provider outage | Timeouts; recent cache marked degraded and aged against evaluation time; expired cache rejected |
 | SQL injection | Parameterized SQLite statements; no user-provided SQL |
 | Partial state | Transactional run and decision persistence |
 | Silent audit modification | SHA-256 chains across canonical decisions and run envelopes containing source evidence |
 | Browser script injection | Escaped embedded JSON, output encoding at DOM sinks and restrictive Content Security Policy |
+| Localhost DNS rebinding / hostile embedding | Loopback bind, Host allowlist, no CORS, frame denial and same-origin assets/API |
+| Accidental filesystem exposure | Application serves only fixed in-memory assets and named API routes, never a directory |
 | Container privilege | Non-root container user and read-only source by convention |
 | Local data disclosure | State and generated artifacts are created with owner-only file permissions |
 
 ## Deployment note
 
-The included HTTP server binds only to `127.0.0.1` and serves an isolated copy of the selected report rather than its whole artifact directory. It remains a demonstration server. For shared deployment, use an authenticated reverse proxy with TLS, request limits, security headers and authorization around reports and raw model inputs.
+Both included HTTP surfaces bind only to `127.0.0.1`. The static-report server serves
+an isolated copy of the selected report rather than its artifact directory. The
+interactive application serves only fixed in-memory assets and allowlisted JSON
+routes; it rejects untrusted Host headers and does not enable CORS. These remain
+single-operator demonstration servers. For shared deployment, use an authenticated
+reverse proxy with TLS, durable request limits, security headers and authorization
+around reports and raw model inputs.
 
 The audit chain is tamper-evident only while a trusted checkpoint is retained. An attacker with full database write access could rebuild the chain. Production deployment should sign and export periodic checkpoints to immutable storage.

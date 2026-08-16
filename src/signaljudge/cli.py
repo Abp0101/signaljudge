@@ -13,11 +13,12 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+from signaljudge.application import ApplicationConfig, ApplicationService, serve_application
 from signaljudge.evaluation import evaluate
 from signaljudge.io import atomic_write_json, load_json, load_predictions, load_results
 from signaljudge.models import RunResult, ValidationError
-from signaljudge.provider import LiveOddsProvider
-from signaljudge.report import generate_dashboard
+from signaljudge.provider import ALLOWED_REGIONS, ALLOWED_SPORTS, LiveOddsProvider
+from signaljudge.report import generate_dashboard, generate_live_dashboard
 from signaljudge.service import ReconciliationService
 from signaljudge.state import StateStore
 
@@ -28,6 +29,36 @@ DEMO_FILES = (
     "odds_latest.json",
     "results.json",
 )
+
+
+def load_api_key_env_file(path: Path) -> bool:
+    """Load only THE_ODDS_API_KEY from a small dotenv file without executing it."""
+    if os.getenv("THE_ODDS_API_KEY", "").strip():
+        return False
+    path = path.resolve()
+    if not path.is_file():
+        return False
+    if path.stat().st_size > 16 * 1024:
+        raise ValidationError("environment file is unexpectedly large")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValidationError(f"could not read environment file: {path.name}") from exc
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        if name.strip() != "THE_ODDS_API_KEY":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if not value or len(value) > 512 or any(ord(character) < 33 for character in value):
+            raise ValidationError("THE_ODDS_API_KEY in the environment file is invalid")
+        os.environ["THE_ODDS_API_KEY"] = value
+        return True
+    return False
 
 
 def resolve_demo_dir(
@@ -157,14 +188,20 @@ def command_run(args: argparse.Namespace) -> int:
 def command_live(args: argparse.Namespace) -> int:
     predictions = load_predictions(Path(args.predictions))
     provider = LiveOddsProvider(Path(args.cache_dir).resolve())
-    snapshot = provider.fetch(args.sport_key)
+    snapshot = provider.fetch(args.sport_key, region=args.region)
     with StateStore(Path(args.db).resolve()) as store:
         result = ReconciliationService(store).run(predictions, snapshot, mode="live")
         audit_valid, entries = store.verify_audit_chain()
     _print_result(result)
     atomic_write_json(Path(args.output).resolve(), _result_payload(result))
+    report = Path(args.report).resolve()
+    generate_live_dashboard(report, result, audit_valid, entries)
     print(f"Audit chain: {'VALID' if audit_valid else 'INVALID'} ({entries} entries)")
-    return _result_exit_code(result, audit_valid)
+    print(f"Dashboard: {report}")
+    exit_code = _result_exit_code(result, audit_valid)
+    if args.serve:
+        serve_report(report, args.port)
+    return exit_code
 
 
 def serve_report(report: Path, port: int) -> None:
@@ -192,6 +229,20 @@ def command_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_app(args: argparse.Namespace) -> int:
+    """Run the interactive localhost operator console."""
+    load_api_key_env_file(Path(args.env_file))
+    config = ApplicationConfig(
+        prediction_dir=Path(args.predictions_dir).resolve(),
+        db_path=Path(args.db).resolve(),
+        cache_dir=Path(args.cache_dir).resolve(),
+        demo_dir=resolve_demo_dir(),
+    )
+    service = ApplicationService(config)
+    serve_application(service, port=args.port, open_browser=args.open)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="signaljudge",
@@ -216,11 +267,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     live = subparsers.add_parser("live", help="fetch live odds and reconcile matching predictions")
     live.add_argument("--predictions", required=True)
-    live.add_argument("--sport-key", default="baseball_mlb", choices=["baseball_mlb", "basketball_nba"])
+    live.add_argument("--sport-key", default="baseball_mlb", choices=sorted(ALLOWED_SPORTS))
+    live.add_argument(
+        "--region",
+        choices=sorted(ALLOWED_REGIONS),
+        help="bookmaker region; defaults to UK for EPL and US otherwise",
+    )
     live.add_argument("--db", default=".signaljudge/live.db")
     live.add_argument("--cache-dir", default=".signaljudge/cache")
     live.add_argument("--output", default="artifacts/live-ranking.json")
+    live.add_argument("--report", default="artifacts/live-report.html")
+    live.add_argument("--serve", action="store_true", help="serve the generated live dashboard")
+    live.add_argument("--port", type=int, default=8765)
     live.set_defaults(func=command_live)
+
+    app = subparsers.add_parser(
+        "app", help="open the interactive live-fixture and prediction console"
+    )
+    app.add_argument(
+        "--predictions-dir",
+        default="predictions",
+        help="directory containing one <sport_key>.json prediction file per sport",
+    )
+    app.add_argument("--db", default=".signaljudge/application.db")
+    app.add_argument("--cache-dir", default=".signaljudge/cache")
+    app.add_argument(
+        "--env-file",
+        default=".env",
+        help="dotenv file from which only THE_ODDS_API_KEY is safely parsed",
+    )
+    app.add_argument("--port", type=int, default=8765)
+    app.add_argument("--open", action="store_true", help="open the application in a browser")
+    app.set_defaults(func=command_app)
 
     serve = subparsers.add_parser("serve", help="serve an existing report on localhost")
     serve.add_argument("--report", default="artifacts/report.html")

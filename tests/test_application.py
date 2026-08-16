@@ -1,0 +1,207 @@
+import http.client
+import json
+import os
+import shutil
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from signaljudge.application import (
+    ApplicationConfig,
+    ApplicationHTTPServer,
+    ApplicationService,
+    RefreshRateLimitError,
+)
+from signaljudge.cli import build_parser, load_api_key_env_file
+from signaljudge.io import load_json
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEMO = ROOT / "data" / "demo"
+
+
+class FakeProvider:
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.calls = []
+
+    def fetch(self, sport_key, api_key=None, region=None):
+        self.calls.append((sport_key, region))
+        return self.snapshot
+
+
+class Clock:
+    def __init__(self):
+        self.value = 100.0
+
+    def __call__(self):
+        return self.value
+
+
+class ApplicationTests(unittest.TestCase):
+    def _service(self, root, with_predictions=True, clock=None):
+        prediction_dir = root / "predictions"
+        prediction_dir.mkdir()
+        if with_predictions:
+            shutil.copy2(
+                DEMO / "model_predictions.json",
+                prediction_dir / "baseball_mlb.json",
+            )
+        snapshot = load_json(DEMO / "odds_latest.json")
+        for event in snapshot["data"]:
+            event.setdefault("sport_key", "baseball_mlb")
+        provider = FakeProvider(snapshot)
+        config = ApplicationConfig(
+            prediction_dir=prediction_dir,
+            db_path=root / "application.db",
+            cache_dir=root / "cache",
+            demo_dir=DEMO,
+            response_ttl_seconds=300,
+            refresh_cooldown_seconds=30,
+        )
+        return ApplicationService(config, provider=provider, monotonic=clock or Clock()), provider
+
+    def test_live_application_reuses_core_and_exposes_complete_audit_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, provider = self._service(Path(directory))
+            payload = service.live_rankings("baseball_mlb", "us")
+        self.assertEqual(provider.calls, [("baseball_mlb", "us")])
+        self.assertEqual(payload["total_events"], 8)
+        self.assertEqual(payload["reconciled_events"], 8)
+        self.assertGreaterEqual(payload["material_conflicts"], 3)
+        self.assertTrue(payload["audit"]["valid"])
+        self.assertTrue(all(item["prediction_available"] for item in payload["matches"]))
+        first = payload["matches"][0]
+        self.assertIn(first["winner"], {"MODEL", "MARKET", "ABSTAIN"})
+        self.assertTrue(first["home_team"])
+        self.assertTrue(first["away_team"])
+        self.assertTrue(first["commence_time"].endswith("Z"))
+        self.assertTrue(first["rationale"])
+
+    def test_missing_model_file_keeps_live_fixtures_visible_without_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, _provider = self._service(Path(directory), with_predictions=False)
+            payload = service.live_rankings("baseball_mlb", "us")
+        self.assertEqual(payload["prediction_source"]["status"], "missing")
+        self.assertEqual(payload["reconciled_events"], 0)
+        self.assertEqual(payload["total_events"], 8)
+        self.assertEqual(payload["fetched_at"], "2026-08-16T18:00:00Z")
+        self.assertIsNone(payload["run_id"])
+        self.assertTrue(all(not item["prediction_available"] for item in payload["matches"]))
+        self.assertTrue(
+            all(item["status"] == "NO_PREDICTION" for item in payload["matches"])
+        )
+
+    def test_malformed_provider_event_is_omitted_from_unpredicted_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, provider = self._service(Path(directory), with_predictions=False)
+            provider.snapshot["data"].append(
+                {
+                    "event_id": "unsafe-event",
+                    "sport_key": "baseball_mlb",
+                    "home_team": "<script>" + "x" * 200,
+                    "away_team": "Away",
+                    "start_time": "not-a-date",
+                    "books": [],
+                }
+            )
+            payload = service.live_rankings("baseball_mlb", "us")
+        self.assertEqual(payload["total_events"], 8)
+        self.assertTrue(any("malformed provider event" in item for item in payload["warnings"]))
+
+    def test_response_cache_protects_quota_and_manual_refresh_is_rate_limited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock = Clock()
+            service, provider = self._service(Path(directory), clock=clock)
+            first = service.live_rankings("baseball_mlb", "us")
+            clock.value += 5
+            second = service.live_rankings("baseball_mlb", "us")
+            with self.assertRaises(RefreshRateLimitError):
+                service.live_rankings("baseball_mlb", "us", force_refresh=True)
+            clock.value += 30
+            refreshed = service.live_rankings("baseball_mlb", "us", force_refresh=True)
+        self.assertFalse(first["response_cache"])
+        self.assertTrue(second["response_cache"])
+        self.assertFalse(refreshed["response_cache"])
+        self.assertEqual(len(provider.calls), 2)
+
+    def test_demo_endpoint_remains_reproducible_without_live_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, provider = self._service(Path(directory), with_predictions=False)
+            payload = service.demo_rankings()
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(payload["market_source"]["origin"], "DEMO")
+        self.assertEqual(payload["reconciled_events"], 8)
+        self.assertGreaterEqual(payload["material_conflicts"], 3)
+        self.assertGreater(payload["source_counts"]["MODEL"], 0)
+        self.assertGreater(payload["source_counts"]["MARKET"], 0)
+
+    def test_http_surface_requires_same_origin_header_and_sets_security_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, _provider = self._service(Path(directory), with_predictions=False)
+            try:
+                server = ApplicationHTTPServer(("127.0.0.1", 0), service)
+            except PermissionError:
+                self.skipTest("the execution sandbox does not permit localhost sockets")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+                connection.request("GET", "/")
+                root = connection.getresponse()
+                root_body = root.read().decode("utf-8")
+                self.assertEqual(root.status, 200)
+                self.assertIn("frame-ancestors 'none'", root.getheader("Content-Security-Policy"))
+                self.assertIn("Live fixtures", root_body)
+
+                connection.request("GET", "/assets/app.js")
+                asset = connection.getresponse()
+                asset.read()
+                self.assertEqual(asset.status, 200)
+                self.assertEqual(asset.getheader("Cache-Control"), "no-store")
+
+                connection.request("GET", "/api/demo")
+                forbidden = connection.getresponse()
+                forbidden.read()
+                self.assertEqual(forbidden.status, 403)
+
+                connection.request(
+                    "GET", "/api/demo", headers={"X-SignalJudge-Request": "1"}
+                )
+                allowed = connection.getresponse()
+                body = json.loads(allowed.read())
+                self.assertEqual(allowed.status, 200)
+                self.assertEqual(body["market_source"]["origin"], "DEMO")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_cli_exposes_application_command(self):
+        args = build_parser().parse_args(["app", "--open", "--port", "9000"])
+        self.assertEqual(args.command, "app")
+        self.assertTrue(args.open)
+        self.assertEqual(args.port, 9000)
+
+    def test_dotenv_loader_reads_only_api_key_without_shell_expansion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text(
+                "IGNORED=$(touch should-not-run)\nTHE_ODDS_API_KEY='safe-test-key'\n",
+                encoding="utf-8",
+            )
+            previous = os.environ.pop("THE_ODDS_API_KEY", None)
+            try:
+                loaded = load_api_key_env_file(path)
+                self.assertTrue(loaded)
+                self.assertEqual(os.environ["THE_ODDS_API_KEY"], "safe-test-key")
+                self.assertFalse((Path(directory) / "should-not-run").exists())
+            finally:
+                os.environ.pop("THE_ODDS_API_KEY", None)
+                if previous is not None:
+                    os.environ["THE_ODDS_API_KEY"] = previous
+
+
+if __name__ == "__main__":
+    unittest.main()

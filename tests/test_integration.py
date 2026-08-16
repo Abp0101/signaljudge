@@ -2,11 +2,13 @@ import copy
 import json
 import tempfile
 import unittest
+from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from signaljudge.evaluation import evaluate
-from signaljudge.cli import resolve_demo_dir
+from signaljudge.cli import command_live, resolve_demo_dir
 from signaljudge.io import load_json, load_predictions, load_results
 from signaljudge.service import ReconciliationService
 from signaljudge.state import StateStore
@@ -35,6 +37,13 @@ class EndToEndTests(unittest.TestCase):
                 self.assertGreater(latest.source_counts["MODEL"], 0)
                 self.assertGreater(latest.source_counts["MARKET"], 0)
                 self.assertEqual(len(latest.decisions), len(predictions))
+                by_event = {item.event_id: item for item in predictions}
+                for decision in latest.decisions:
+                    source = by_event[decision.event_id]
+                    self.assertEqual(decision.home_team, source.home_team)
+                    self.assertEqual(decision.away_team, source.away_team)
+                    self.assertEqual(decision.sport_key, source.sport_key)
+                    self.assertTrue(decision.commence_time.endswith("Z"))
                 self.assertTrue(any(d.previous_probability is not None for d in latest.decisions))
                 valid, count = store.verify_audit_chain()
                 self.assertTrue(valid)
@@ -153,6 +162,31 @@ class EndToEndTests(unittest.TestCase):
                 store.connection.commit()
                 valid, _ = store.verify_audit_chain()
             self.assertFalse(valid)
+
+    def test_live_command_writes_context_rich_dashboard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "live.html"
+            args = Namespace(
+                predictions=str(DEMO / "model_predictions.json"),
+                sport_key="baseball_mlb",
+                region="us",
+                cache_dir=str(root / "cache"),
+                db=str(root / "live.db"),
+                output=str(root / "live.json"),
+                report=str(report),
+                serve=False,
+                port=8765,
+            )
+            snapshot = load_json(DEMO / "odds_latest.json")
+            with patch("signaljudge.cli.LiveOddsProvider.fetch", return_value=snapshot) as fetch:
+                exit_code = command_live(args)
+            html = report.read_text(encoding="utf-8")
+            self.assertEqual(exit_code, 0)
+            fetch.assert_called_once_with("baseball_mlb", region="us")
+            self.assertIn("<th>Fixture</th><th>Kickoff</th><th>Prediction</th>", html)
+            self.assertIn("Boston Red Sox", html)
+            self.assertIn("New York Yankees", html)
 
 
 if __name__ == "__main__":

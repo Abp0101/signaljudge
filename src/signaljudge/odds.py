@@ -59,6 +59,9 @@ def evaluated_at(snapshot: Mapping[str, Any]):
 
 
 def validate_event_identity(prediction: Prediction, event: Mapping[str, Any]) -> None:
+    sport_key = event.get("sport_key")
+    if sport_key is not None and require_id(sport_key, "odds.sport_key") != prediction.sport_key:
+        raise ValidationError(f"sport mismatch for {prediction.event_id}")
     home = require_text(event.get("home_team"), "odds.home_team")
     away = require_text(event.get("away_team"), "odds.away_team")
     if home != prediction.home_team or away != prediction.away_team:

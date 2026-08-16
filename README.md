@@ -32,6 +32,42 @@ PYTHONPATH=src python3 -m signaljudge serve
 # http://127.0.0.1:8765/report.html
 ```
 
+## Interactive application
+
+SignalJudge also ships as a local application. It preserves the same tested
+reconciliation service and SQLite audit state while adding sport selection, current
+fixtures, sorting, filtering, refresh controls, and explicit live/cache/model-source
+status.
+
+```bash
+export THE_ODDS_API_KEY='your-key'
+PYTHONPATH=src python3 -m signaljudge app --open
+# http://127.0.0.1:8765/
+```
+
+Or use `make app`. The application offers two modes:
+
+- **Live markets** fetches current odds for MLB, NBA, or the English Premier
+  League. It reads independent predictions from `predictions/<sport_key>.json`.
+- **Assessment demo** runs the bundled, reproducible two-snapshot fixture without
+a network connection or API key.
+
+For local convenience, `app` also checks `.env` when the variable is not already
+exported. It parses only a literal `THE_ODDS_API_KEY` assignment; it does not execute
+the file, expand shell expressions, or expose the value to the browser. Select a
+different file with `--env-file`.
+
+Every provider fixture remains visible. If its exact event ID has no independent
+prediction, the row is labelled `NO_PREDICTION`; SignalJudge never fabricates a
+model score from the bookmaker market. Use the controls to sort by rank, kickoff,
+final probability, or disagreement size and to filter model wins, market wins,
+conflicts, abstentions, and unavailable predictions.
+
+The application caches each sport/region response for five minutes and rate-limits
+manual provider refreshes to one every 30 seconds. The screen distinguishes
+provider `LIVE`, recent degraded `CACHE`, and synthetic `DEMO` data. “Live” means
+the latest provider snapshot, not necessarily a match currently in play.
+
 Expected replay result:
 
 ```text
@@ -151,7 +187,7 @@ Prediction files use schema version 1:
 }
 ```
 
-The `event_id`, teams and start time must match. SignalJudge refuses ambiguous identity rather than fuzzy-matching the wrong event.
+The `event_id`, sport, teams and start time must match. SignalJudge refuses ambiguous identity rather than fuzzy-matching the wrong event. Soccer predictions may select the home team, away team or `Draw`; bookmaker margin is removed across all three outcomes.
 
 ```bash
 PYTHONPATH=src python3 -m signaljudge run \
@@ -173,10 +209,35 @@ export THE_ODDS_API_KEY='your-key'
 
 PYTHONPATH=src python3 -m signaljudge live \
   --predictions path/to/current_predictions.json \
-  --sport-key baseball_mlb
+  --sport-key baseball_mlb \
+  --serve
 ```
 
-The hostname and supported sport keys are allowlisted. Requests have response-size limits, timeouts, bounded exponential retry, `Retry-After` handling, quota metadata and last-known-good fallback.
+Live mode writes `artifacts/live-ranking.json` and `artifacts/live-report.html`. The dashboard identifies every game with both teams, kickoff time, selected outcome, opponent, model probability, fair market probability and reconciled probability.
+
+Supported live configurations are MLB and NBA with US bookmakers, plus the English Premier League with UK bookmakers. Region defaults are sport-aware and can be overridden from the fixed `us`, `uk`, `eu` or `au` allowlist. For EPL:
+
+```bash
+PYTHONPATH=src python3 -m signaljudge live \
+  --predictions path/to/epl_predictions.json \
+  --sport-key soccer_epl \
+  --region uk \
+  --report artifacts/epl-live.html \
+  --serve
+```
+
+The hostname, sport keys and bookmaker regions are allowlisted. Requests have response-size limits, timeouts, bounded exponential retry, `Retry-After` handling, quota metadata and last-known-good fallback. Live predictions must remain independently produced; SignalJudge never derives the model score from bookmaker odds.
+
+For the application, name the prediction file after its sport key:
+
+```text
+predictions/baseball_mlb.json
+predictions/basketball_nba.json
+predictions/soccer_epl.json
+```
+
+The sport selector reports each adapter as `ready`, `missing`, or `invalid` before
+the first market fetch. See `predictions/README.md` for the adapter contract.
 
 ## State and auditability
 
@@ -212,6 +273,11 @@ The suite covers:
 - rolling batches containing previously unseen events;
 - stale-cache rejection and live/cache provenance;
 - dashboard script-injection resistance;
+- localhost Host-header and same-origin API enforcement;
+- application response caching and refresh throttling;
+- live fixtures remaining visible when predictions are unavailable;
+- fixture, opponent and kickoff context in replay and live dashboards;
+- UK EPL region defaults and three-outcome soccer normalization;
 - migration from the original SQLite schema;
 - objective correction of model-only and market-only failures.
 
@@ -227,8 +293,11 @@ src/signaljudge/
   service.py       stateful workflow orchestration
   state.py         SQLite persistence and audit chain
   evaluation.py    proper scoring rules and baselines
-  report.py        dependency-free replay dashboard
+  report.py        dependency-free replay and live dashboards
+  application.py   secure localhost API and application orchestration
+  web_assets.py    dependency-free interactive operator console
 data/demo/         labelled synthetic two-snapshot fixture
+predictions/       independent per-sport live prediction adapters
 tests/             unit, security and end-to-end tests
 ```
 
@@ -240,12 +309,12 @@ With more time I would:
 
 1. evaluate on a large, time-stamped real historical dataset and tune thresholds only on a separate training split;
 2. calibrate source reliability by league and confidence bucket using rolling Brier scores;
-3. support three-way markets, spreads and totals without conflating their probability spaces;
+3. support simultaneous full-outcome distributions, spreads and totals without conflating probability spaces;
 4. replace SQLite with PostgreSQL for concurrent writers and sign audit checkpoints in external immutable storage;
 5. add schema-contract monitoring for the odds provider and alerting for calibration drift;
 6. deploy the dashboard behind authenticated HTTPS rather than exposing a local demonstration server.
 
-The intentionally small scope is MLB head-to-head probability reconciliation. It prioritizes a complete, defensible system over unsupported breadth.
+The deliberately bounded scope is head-to-head outcome reconciliation for MLB, NBA and EPL. EPL supports home, away and draw selections while preserving one ranked prediction per event. The project prioritizes a complete, defensible system over unsupported market breadth.
 
 ## Contributing
 

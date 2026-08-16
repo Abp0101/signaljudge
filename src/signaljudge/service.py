@@ -18,10 +18,11 @@ def _ranks(values: Mapping[str, float]) -> Dict[str, int]:
     return {event_id: index + 1 for index, event_id in enumerate(ordered)}
 
 
-def _context_key(predictions: List[Prediction]) -> str:
+def _context_key(predictions: List[Prediction], snapshot: Mapping[str, Any]) -> str:
     sports = ",".join(sorted({item.sport_key for item in predictions}))
     models = ",".join(sorted({item.model_version for item in predictions}))
-    return f"sports={sports}|models={models}|market=h2h"
+    region = str(snapshot.get("region", "unspecified"))
+    return f"sports={sports}|models={models}|market=h2h|region={region}"
 
 
 def _prediction_payload(item: Prediction) -> Dict[str, Any]:
@@ -54,7 +55,7 @@ class ReconciliationService:
         mode: str,
         previous_snapshot: Optional[Mapping[str, Any]] = None,
     ) -> RunResult:
-        context_key = _context_key(predictions)
+        context_key = _context_key(predictions, snapshot)
         if previous_snapshot is None:
             candidate = self.store.latest_snapshot(context_key)
             if candidate is not None and evaluated_at(candidate) < evaluated_at(snapshot):

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
-from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp
+from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp, isoformat
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,10 @@ def unresolved_decision(
         movement_coherence=0.0,
         reason_codes=codes,
         rationale=f"Abstained because no valid matching market evidence is available: {reason}.",
+        sport_key=prediction.sport_key,
+        commence_time=isoformat(prediction.commence_time),
+        home_team=prediction.home_team,
+        away_team=prediction.away_team,
         status="UNRESOLVED",
         previous_probability=previous.reconciled_probability if previous else None,
         previous_winner=previous.winner if previous else None,
@@ -168,6 +172,10 @@ def reconcile(
             movement_coherence=market.movement_coherence,
             reason_codes=codes,
             rationale=_human_rationale(codes, "ABSTAIN"),
+            sport_key=prediction.sport_key,
+            commence_time=isoformat(prediction.commence_time),
+            home_team=prediction.home_team,
+            away_team=prediction.away_team,
             status="ABSTAINED",
             previous_probability=previous.reconciled_probability if previous else None,
             previous_winner=previous.winner if previous else None,
@@ -212,6 +220,10 @@ def reconcile(
         movement_coherence=market.movement_coherence,
         reason_codes=codes,
         rationale=_human_rationale(codes, winner),
+        sport_key=prediction.sport_key,
+        commence_time=isoformat(prediction.commence_time),
+        home_team=prediction.home_team,
+        away_team=prediction.away_team,
         previous_probability=previous.reconciled_probability if previous else None,
         previous_winner=previous.winner if previous else None,
     )
