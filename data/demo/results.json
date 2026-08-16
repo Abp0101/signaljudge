@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic settled outcomes used only to demonstrate time-safe replay evaluation.",
+  "results": [
+    {"event_id":"sj-mlb-001","winner":"New York Yankees"},
+    {"event_id":"sj-mlb-002","winner":"Los Angeles Dodgers"},
+    {"event_id":"sj-mlb-003","winner":"New York Mets"},
+    {"event_id":"sj-mlb-004","winner":"Chicago Cubs"},
+    {"event_id":"sj-mlb-005","winner":"Houston Astros"},
+    {"event_id":"sj-mlb-006","winner":"Seattle Mariners"},
+    {"event_id":"sj-mlb-007","winner":"Baltimore Orioles"},
+    {"event_id":"sj-mlb-008","winner":"Philadelphia Phillies"}
+  ]
+}
+

@@ -1,0 +1,81 @@
+"""Dependency-free interactive audit dashboard generation."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Mapping
+
+from signaljudge.models import RunResult
+
+
+def _safe_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True).replace("</", "<\\/")
+
+
+def generate_dashboard(
+    output: Path,
+    opening: RunResult,
+    latest: RunResult,
+    metrics: Mapping[str, Mapping[str, float]],
+    cases: List[Mapping[str, object]],
+    audit_valid: bool,
+    audit_entries: int,
+) -> None:
+    payload = {
+        "runs": [
+            {
+                "label": "Opening snapshot",
+                "run_id": opening.run_id,
+                "fetched_at": opening.odds_fetched_at,
+                "conflicts": opening.material_conflicts,
+                "source_counts": opening.source_counts,
+                "decisions": [decision.as_dict() for decision in opening.decisions],
+            },
+            {
+                "label": "Latest snapshot",
+                "run_id": latest.run_id,
+                "fetched_at": latest.odds_fetched_at,
+                "conflicts": latest.material_conflicts,
+                "source_counts": latest.source_counts,
+                "decisions": [decision.as_dict() for decision in latest.decisions],
+            },
+        ],
+        "metrics": metrics,
+        "cases": cases,
+        "audit": {"valid": audit_valid, "entries": audit_entries},
+    }
+    html = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SignalJudge Decision Replay Lab</title>
+<style>
+:root{--bg:#07111f;--panel:#0d1b2d;--panel2:#12233a;--ink:#ecf4ff;--muted:#91a4bd;--teal:#2dd4bf;--amber:#fbbf24;--red:#fb7185;--line:#233750}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#122a46 0,var(--bg) 38%);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}
+main{max-width:1280px;margin:auto;padding:42px 26px 70px}header{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;margin-bottom:30px}.eyebrow{color:var(--teal);font-weight:800;letter-spacing:.15em;font-size:12px}.title{font-size:38px;line-height:1.05;margin:8px 0}.sub{color:var(--muted);max-width:720px}.audit{border:1px solid #1e594f;background:#0b2a29;padding:10px 14px;border-radius:12px;color:#9df3e6;white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}.card{background:linear-gradient(145deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:17px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:28px;font-weight:800;margin-top:3px}.small{font-size:12px;color:var(--muted)}
+.panel{background:rgba(13,27,45,.92);border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:18px;box-shadow:0 18px 45px #0004}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:16px}h2{font-size:19px;margin:0}input[type=range]{width:260px;accent-color:var(--teal)}
+table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:11px 8px;border-bottom:1px solid var(--line)}td{padding:13px 8px;border-bottom:1px solid #1b2e45;vertical-align:top}.rank{font-weight:900;font-size:17px}.pct{font-variant-numeric:tabular-nums;font-weight:700}.pill{display:inline-block;border-radius:99px;padding:3px 8px;font-size:11px;font-weight:900}.model{background:#30245e;color:#c4b5fd}.market{background:#113d39;color:#78f4de}.conflict{color:var(--amber)}.reason{max-width:360px;color:#b9c8da}.delta-up{color:var(--teal)}.delta-down{color:var(--red)}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.metric-title{display:flex;justify-content:space-between;font-weight:800}.bar{height:7px;background:#20334c;border-radius:9px;margin:12px 0;overflow:hidden}.bar span{height:100%;display:block;background:linear-gradient(90deg,var(--teal),#60a5fa)}.winner-card{border-color:#23685e}.cases{display:flex;gap:10px;flex-wrap:wrap}.case{background:#10233a;border:1px solid var(--line);border-radius:12px;padding:10px 12px}.yes{color:var(--teal);font-weight:800}
+@media(max-width:900px){.grid,.metrics{grid-template-columns:1fr 1fr}.hide-sm{display:none}header{display:block}.audit{display:inline-block;margin-top:15px}}@media(max-width:600px){.grid,.metrics{grid-template-columns:1fr}.title{font-size:30px}.panel{overflow-x:auto}.panel-head{display:block}input[type=range]{width:100%;margin-top:12px}}
+</style></head><body><main>
+<header><div><div class="eyebrow">SIGNALJUDGE / DECISION REPLAY LAB</div><h1 class="title">When signals disagree,<br>make the decision auditable.</h1><div class="sub">A stateful reconciliation engine comparing calibrated model predictions with de-vigged, quality-scored market consensus.</div></div><div class="audit" id="audit"></div></header>
+<section class="grid" id="summary"></section>
+<section class="panel"><div class="panel-head"><div><h2 id="run-label">Reconciled ranking</h2><div class="small" id="run-meta"></div></div><div><label class="small" for="timeline">Replay market update</label><br><input id="timeline" type="range" min="0" max="1" step="1" value="1"></div></div>
+<table><thead><tr><th>Rank</th><th>Prediction</th><th>Model</th><th>Market</th><th>Final</th><th>Winner</th><th class="hide-sm">Change</th><th>Audit rationale</th></tr></thead><tbody id="ranking"></tbody></table></section>
+<section class="panel"><div class="panel-head"><div><h2>Counterfactual replay</h2><div class="small">Lower Brier score and log loss are better. Settled fixture outcomes are never used by the decision engine.</div></div></div><div class="metrics" id="metrics"></div></section>
+<section class="panel"><div class="panel-head"><div><h2>Blind-source corrections</h2><div class="small">Cases where the reconciled decision corrected the classification made by a single-source baseline.</div></div></div><div class="cases" id="cases"></div></section>
+<script id="payload" type="application/json">__PAYLOAD__</script>
+<script>
+const data=JSON.parse(document.getElementById('payload').textContent);const pct=v=>(v*100).toFixed(1)+'%';
+document.getElementById('audit').textContent=(data.audit.valid?'✓ Audit chain verified':'⚠ Audit chain invalid')+' · '+data.audit.entries+' decisions';
+function renderRun(index){const r=data.runs[index];document.getElementById('run-label').textContent=r.label;document.getElementById('run-meta').textContent=r.fetched_at+' · '+r.run_id;
+ const changed=r.decisions.filter(d=>d.previous_probability!==null&&Math.abs(d.reconciled_probability-d.previous_probability)>=.01).length;
+ document.getElementById('summary').innerHTML=[['Material conflicts',r.conflicts,'≥10pp or ≥3 ranks'],['Model wins',r.source_counts.MODEL,'Explicit source decisions'],['Market wins',r.source_counts.MARKET,'Explicit source decisions'],['Ranking updates',changed,index?'Since opening snapshot':'Initial state']].map(x=>`<div class="card"><div class="label">${x[0]}</div><div class="value">${x[1]}</div><div class="small">${x[2]}</div></div>`).join('');
+ document.getElementById('ranking').innerHTML=r.decisions.map(d=>{let delta='—',cls='';if(d.previous_probability!==null){const n=(d.reconciled_probability-d.previous_probability)*100;delta=(n>=0?'+':'')+n.toFixed(1)+'pp';cls=n>=0?'delta-up':'delta-down'}return `<tr><td class="rank">${d.final_rank}</td><td><b>${d.selection}</b><div class="small">${d.event_id}</div></td><td class="pct">${pct(d.model_probability)}</td><td class="pct">${pct(d.market_probability)}${d.material_conflict?'<div class="small conflict">conflict</div>':''}</td><td class="pct">${pct(d.reconciled_probability)}</td><td><span class="pill ${d.winner.toLowerCase()}">${d.winner}</span><div class="small">${pct(d.decision_confidence)} decision confidence</div></td><td class="hide-sm ${cls}">${delta}</td><td class="reason">${d.rationale}<div class="small">${d.reason_codes.join(' · ')}</div></td></tr>`}).join('');}
+const best=Math.min(...Object.values(data.metrics).map(x=>x.brier));document.getElementById('metrics').innerHTML=Object.entries(data.metrics).map(([name,m])=>`<div class="card ${m.brier===best?'winner-card':''}"><div class="metric-title"><span>${name==='AGENT'?'SignalJudge':name+' only'}</span><span>${m.brier===best?'BEST':''}</span></div><div class="bar"><span style="width:${Math.max(5,(1-m.brier)*100)}%"></span></div><div><b>Brier ${m.brier.toFixed(3)}</b> · Log loss ${m.log_loss.toFixed(3)}</div><div class="small">Accuracy ${pct(m.accuracy)} · n=${m.sample_size}</div></div>`).join('');
+const corrected=data.cases.filter(c=>c.corrected_model_only||c.corrected_market_only);document.getElementById('cases').innerHTML=corrected.map(c=>`<div class="case"><b>${c.selection}</b><div class="small">${c.event_id}</div><div class="yes">✓ Corrected ${c.corrected_model_only?'model-only':'market-only'} baseline</div></div>`).join('')||'<div class="small">No corrected classifications in this replay.</div>';
+document.getElementById('timeline').addEventListener('input',e=>renderRun(Number(e.target.value)));renderRun(1);
+</script></main></body></html>"""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(html.replace("__PAYLOAD__", _safe_json(payload)), encoding="utf-8")
+

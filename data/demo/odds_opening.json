@@ -1,0 +1,57 @@
+{
+  "success": true,
+  "source": "documented-synthetic-fixture",
+  "odds_format": "decimal",
+  "fetched_at": "2026-08-15T12:00:00Z",
+  "data": [
+    {"event_id":"sj-mlb-001","home_team":"New York Yankees","away_team":"Boston Red Sox","start_time":"2026-08-16T23:00:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"New York Yankees","price":1.3736},{"name":"Boston Red Sox","price":3.2051}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"New York Yankees","price":1.3736},{"name":"Boston Red Sox","price":3.2051}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"New York Yankees","price":1.3736},{"name":"Boston Red Sox","price":3.2051}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"New York Yankees","price":1.3736},{"name":"Boston Red Sox","price":3.2051}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"New York Yankees","price":1.3736},{"name":"Boston Red Sox","price":3.2051}]}]},
+    {"event_id":"sj-mlb-002","home_team":"Los Angeles Dodgers","away_team":"San Diego Padres","start_time":"2026-08-16T23:10:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Los Angeles Dodgers","price":1.4569},{"name":"San Diego Padres","price":2.8281}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Los Angeles Dodgers","price":1.4569},{"name":"San Diego Padres","price":2.8281}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Los Angeles Dodgers","price":1.4569},{"name":"San Diego Padres","price":2.8281}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Los Angeles Dodgers","price":1.4569},{"name":"San Diego Padres","price":2.8281}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Los Angeles Dodgers","price":1.4569},{"name":"San Diego Padres","price":2.8281}]}]},
+    {"event_id":"sj-mlb-003","home_team":"Atlanta Braves","away_team":"New York Mets","start_time":"2026-08-16T23:20:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Atlanta Braves","price":1.5509},{"name":"New York Mets","price":2.5304}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Atlanta Braves","price":1.5509},{"name":"New York Mets","price":2.5304}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Atlanta Braves","price":1.5509},{"name":"New York Mets","price":2.5304}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Atlanta Braves","price":1.5509},{"name":"New York Mets","price":2.5304}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Atlanta Braves","price":1.5509},{"name":"New York Mets","price":2.5304}]}]},
+    {"event_id":"sj-mlb-004","home_team":"Chicago Cubs","away_team":"Cincinnati Reds","start_time":"2026-08-16T23:30:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Chicago Cubs","price":1.5763},{"name":"Cincinnati Reds","price":2.4655}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Chicago Cubs","price":1.5763},{"name":"Cincinnati Reds","price":2.4655}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Chicago Cubs","price":1.5763},{"name":"Cincinnati Reds","price":2.4655}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Chicago Cubs","price":1.5763},{"name":"Cincinnati Reds","price":2.4655}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Chicago Cubs","price":1.5763},{"name":"Cincinnati Reds","price":2.4655}]}]},
+    {"event_id":"sj-mlb-005","home_team":"Houston Astros","away_team":"Texas Rangers","start_time":"2026-08-17T00:00:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Houston Astros","price":1.6297},{"name":"Texas Rangers","price":2.3452}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Houston Astros","price":1.6297},{"name":"Texas Rangers","price":2.3452}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Houston Astros","price":1.6297},{"name":"Texas Rangers","price":2.3452}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Houston Astros","price":1.6297},{"name":"Texas Rangers","price":2.3452}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Houston Astros","price":1.6297},{"name":"Texas Rangers","price":2.3452}]}]},
+    {"event_id":"sj-mlb-006","home_team":"Seattle Mariners","away_team":"Oakland Athletics","start_time":"2026-08-17T00:10:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Seattle Mariners","price":1.7170},{"name":"Oakland Athletics","price":2.1853}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Seattle Mariners","price":1.7170},{"name":"Oakland Athletics","price":2.1853}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Seattle Mariners","price":1.7170},{"name":"Oakland Athletics","price":2.1853}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Seattle Mariners","price":1.7170},{"name":"Oakland Athletics","price":2.1853}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Seattle Mariners","price":1.7170},{"name":"Oakland Athletics","price":2.1853}]}]},
+    {"event_id":"sj-mlb-007","home_team":"Toronto Blue Jays","away_team":"Baltimore Orioles","start_time":"2026-08-17T00:20:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Toronto Blue Jays","price":1.5263},{"name":"Baltimore Orioles","price":2.5988}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Toronto Blue Jays","price":1.5263},{"name":"Baltimore Orioles","price":2.5988}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Toronto Blue Jays","price":1.5263},{"name":"Baltimore Orioles","price":2.5988}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Toronto Blue Jays","price":1.5263},{"name":"Baltimore Orioles","price":2.5988}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Toronto Blue Jays","price":1.5263},{"name":"Baltimore Orioles","price":2.5988}]}]},
+    {"event_id":"sj-mlb-008","home_team":"Philadelphia Phillies","away_team":"Miami Marlins","start_time":"2026-08-17T00:30:00Z","books":[
+      {"book":"draftkings","market":"h2h","updated_at":"2026-08-15T11:58:00Z","outcomes":[{"name":"Philadelphia Phillies","price":1.7483},{"name":"Miami Marlins","price":2.1368}]},
+      {"book":"fanduel","market":"h2h","updated_at":"2026-08-15T11:58:10Z","outcomes":[{"name":"Philadelphia Phillies","price":1.7483},{"name":"Miami Marlins","price":2.1368}]},
+      {"book":"betmgm","market":"h2h","updated_at":"2026-08-15T11:58:20Z","outcomes":[{"name":"Philadelphia Phillies","price":1.7483},{"name":"Miami Marlins","price":2.1368}]},
+      {"book":"caesars","market":"h2h","updated_at":"2026-08-15T11:58:30Z","outcomes":[{"name":"Philadelphia Phillies","price":1.7483},{"name":"Miami Marlins","price":2.1368}]},
+      {"book":"betrivers","market":"h2h","updated_at":"2026-08-15T11:58:40Z","outcomes":[{"name":"Philadelphia Phillies","price":1.7483},{"name":"Miami Marlins","price":2.1368}]}]}
+  ]
+}
+
