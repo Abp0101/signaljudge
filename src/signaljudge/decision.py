@@ -5,14 +5,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp, isoformat
 
 
 @dataclass(frozen=True)
 class DecisionConfig:
-    policy_version: str = "2.1"
+    policy_version: str = "2.2"
     material_probability_gap: float = 0.10
     material_rank_delta: int = 3
     coherent_movement_threshold: float = 0.08
@@ -23,6 +23,23 @@ class DecisionConfig:
     model_data_half_life_days: float = 365.0
     minimum_model_data_freshness: float = 0.65
     model_data_age_notice_days: float = 30.0
+    sample_size_reference: int = 250
+    sample_reliability_floor: float = 0.55
+    inference_freshness_floor: float = 0.65
+    inference_decay_per_hour: float = 0.003
+    out_of_distribution_multiplier: float = 0.48
+    forced_winner_multiplier: float = 2.25
+    forced_loser_multiplier: float = 0.40
+
+
+@dataclass(frozen=True)
+class SourceAssessment:
+    rank_delta: int
+    material: bool
+    model_score: float
+    market_score: float
+    forced_winner: Optional[str]
+    reason_codes: Tuple[str, ...]
 
 
 def model_reliability(
@@ -30,9 +47,18 @@ def model_reliability(
     as_of: datetime,
     config: DecisionConfig = DecisionConfig(),
 ) -> float:
-    sample_factor = min(1.0, 0.55 + 0.45 * prediction.historical_sample_size / 250.0)
+    sample_factor = min(
+        1.0,
+        config.sample_reliability_floor
+        + (1.0 - config.sample_reliability_floor)
+        * prediction.historical_sample_size
+        / config.sample_size_reference,
+    )
     age_hours = max(0.0, (as_of - prediction.generated_at).total_seconds() / 3600.0)
-    inference_freshness = max(0.65, 1.0 - 0.003 * age_hours)
+    inference_freshness = max(
+        config.inference_freshness_floor,
+        1.0 - config.inference_decay_per_hour * age_hours,
+    )
     source_age_days = max(
         0.0,
         (as_of - (prediction.source_data_at or prediction.generated_at)).total_seconds()
@@ -42,7 +68,9 @@ def model_reliability(
         config.minimum_model_data_freshness,
         0.5 ** (source_age_days / config.model_data_half_life_days),
     )
-    distribution_factor = 0.48 if prediction.out_of_distribution else 1.0
+    distribution_factor = (
+        config.out_of_distribution_multiplier if prediction.out_of_distribution else 1.0
+    )
     return clamp(
         prediction.historical_accuracy
         * sample_factor
@@ -103,7 +131,7 @@ def unresolved_decision(
         rank_delta=None,
         movement=0.0,
         movement_coherence=0.0,
-        reason_codes=codes,
+        reason_codes=tuple(codes),
         rationale=f"Abstained because no valid matching market evidence is available: {reason}.",
         sport_key=prediction.sport_key,
         commence_time=isoformat(prediction.commence_time),
@@ -115,22 +143,22 @@ def unresolved_decision(
     )
 
 
-def reconcile(
+def _assess_sources(
     prediction: Prediction,
     market: NormalizedMarket,
     as_of: datetime,
     model_rank: int,
     market_rank: int,
-    previous: Optional[Decision] = None,
-    config: DecisionConfig = DecisionConfig(),
-) -> Decision:
+    config: DecisionConfig,
+) -> SourceAssessment:
     probability_gap = abs(prediction.model_probability - market.probability)
     rank_delta = abs(model_rank - market_rank)
-    material = probability_gap >= config.material_probability_gap or rank_delta >= config.material_rank_delta
+    material = (
+        probability_gap >= config.material_probability_gap
+        or rank_delta >= config.material_rank_delta
+    )
     model_score = model_reliability(prediction, as_of, config)
     market_score = clamp(config.market_quality_ceiling * market.quality)
-    model_weight = model_score
-    market_weight = market_score
     codes: List[str] = []
 
     if probability_gap >= config.material_probability_gap:
@@ -148,7 +176,6 @@ def reconcile(
         if source_age_days >= config.model_data_age_notice_days:
             codes.append("MODEL_SOURCE_DATA_AGED")
 
-    forced_winner: Optional[str] = None
     market_unusable = market.valid_book_count < config.minimum_books or market.stale
     model_unusable = prediction.out_of_distribution
     if market.valid_book_count < config.minimum_books:
@@ -158,15 +185,14 @@ def reconcile(
     if prediction.out_of_distribution:
         codes.append("MODEL_OUT_OF_DISTRIBUTION")
 
+    forced_winner: Optional[str] = None
     if (market_unusable and model_unusable) or (
         model_score < config.minimum_source_reliability
         and market_score < config.minimum_source_reliability
     ):
         forced_winner = "ABSTAIN"
         codes.append("BOTH_SOURCES_UNRELIABLE")
-    elif market.valid_book_count < config.minimum_books:
-        forced_winner = "MODEL"
-    elif market.stale:
+    elif market.valid_book_count < config.minimum_books or market.stale:
         forced_winner = "MODEL"
     elif prediction.out_of_distribution:
         forced_winner = "MARKET"
@@ -177,23 +203,54 @@ def reconcile(
         forced_winner = "MARKET"
         codes.append("COHERENT_MARKET_MOVEMENT")
 
-    if forced_winner == "ABSTAIN":
+    return SourceAssessment(
+        rank_delta=rank_delta,
+        material=material,
+        model_score=model_score,
+        market_score=market_score,
+        forced_winner=forced_winner,
+        reason_codes=codes,
+    )
+
+
+def reconcile(
+    prediction: Prediction,
+    market: NormalizedMarket,
+    as_of: datetime,
+    model_rank: int,
+    market_rank: int,
+    previous: Optional[Decision] = None,
+    config: DecisionConfig = DecisionConfig(),
+) -> Decision:
+    assessment = _assess_sources(
+        prediction,
+        market,
+        as_of,
+        model_rank,
+        market_rank,
+        config,
+    )
+    model_weight = assessment.model_score
+    market_weight = assessment.market_score
+    codes = list(assessment.reason_codes)
+
+    if assessment.forced_winner == "ABSTAIN":
         return Decision(
             event_id=prediction.event_id,
             selection=prediction.selection,
             model_probability=prediction.model_probability,
             market_probability=market.probability,
             reconciled_probability=None,
-            model_reliability=model_score,
-            market_reliability=market_score,
+            model_reliability=assessment.model_score,
+            market_reliability=assessment.market_score,
             model_weight=0.0,
             market_weight=0.0,
             winner="ABSTAIN",
             decision_confidence=0.0,
-            material_conflict=material,
+            material_conflict=assessment.material,
             model_rank=model_rank,
             market_rank=market_rank,
-            rank_delta=rank_delta,
+            rank_delta=assessment.rank_delta,
             movement=market.movement,
             movement_coherence=market.movement_coherence,
             reason_codes=codes,
@@ -206,17 +263,17 @@ def reconcile(
             previous_probability=previous.reconciled_probability if previous else None,
             previous_winner=previous.winner if previous else None,
         )
-    if forced_winner == "MODEL":
-        model_weight *= 2.25
-        market_weight *= 0.40
-    elif forced_winner == "MARKET":
-        market_weight *= 2.25
-        model_weight *= 0.40
+    if assessment.forced_winner == "MODEL":
+        model_weight *= config.forced_winner_multiplier
+        market_weight *= config.forced_loser_multiplier
+    elif assessment.forced_winner == "MARKET":
+        market_weight *= config.forced_winner_multiplier
+        model_weight *= config.forced_loser_multiplier
 
     winner = "MODEL" if model_weight >= market_weight else "MARKET"
-    if forced_winner is None:
+    if assessment.forced_winner is None:
         codes.append("MODEL_HIGHER_RELIABILITY" if winner == "MODEL" else "MARKET_HIGHER_RELIABILITY")
-    if not material:
+    if not assessment.material:
         codes.append("SOURCES_BROADLY_AGREE")
 
     total_weight = model_weight + market_weight
@@ -232,16 +289,16 @@ def reconcile(
         model_probability=prediction.model_probability,
         market_probability=market.probability,
         reconciled_probability=final_probability,
-        model_reliability=model_score,
-        market_reliability=market_score,
+        model_reliability=assessment.model_score,
+        market_reliability=assessment.market_score,
         model_weight=model_weight,
         market_weight=market_weight,
         winner=winner,
         decision_confidence=decision_confidence,
-        material_conflict=material,
+        material_conflict=assessment.material,
         model_rank=model_rank,
         market_rank=market_rank,
-        rank_delta=rank_delta,
+        rank_delta=assessment.rank_delta,
         movement=market.movement,
         movement_coherence=market.movement_coherence,
         reason_codes=codes,

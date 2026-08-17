@@ -17,7 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from signaljudge.io import load_json, load_predictions
+from signaljudge import __version__
+from signaljudge.demo import run_demo_replay
+from signaljudge.io import load_predictions
 from signaljudge.models import (
     Decision,
     Prediction,
@@ -71,12 +73,10 @@ class ApplicationService:
         for key in sorted(ALLOWED_SPORTS):
             path = self._prediction_path(key)
             status = "missing"
-            count = 0
             if path.is_file():
                 try:
-                    predictions = self._load_sport_predictions(key)
+                    self._load_sport_predictions(key)
                     status = "ready"
-                    count = len(predictions)
                 except ValidationError:
                     status = "invalid"
             else:
@@ -84,7 +84,6 @@ class ApplicationService:
                     model = load_model_if_available(self.config.model_dir, key)
                     if model is not None:
                         status = "trained"
-                        count = len(model.ratings)
                 except ValidationError:
                     status = "invalid"
             sports.append(
@@ -93,7 +92,6 @@ class ApplicationService:
                     "title": str(SPORT_CONFIGS[key]["title"]),
                     "default_region": str(SPORT_CONFIGS[key]["default_region"]),
                     "prediction_status": status,
-                    "prediction_count": count,
                 }
             )
         return {
@@ -136,21 +134,10 @@ class ApplicationService:
             return dict(payload)
 
     def demo_rankings(self) -> Dict[str, Any]:
-        predictions = load_predictions(self.config.demo_dir / "model_predictions.json")
-        opening_snapshot = load_json(self.config.demo_dir / "odds_opening.json")
-        latest_snapshot = load_json(self.config.demo_dir / "odds_latest.json")
         with self._lock, StateStore(self.config.db_path) as store:
-            service = ReconciliationService(store)
-            opening = service.run(
-                predictions, opening_snapshot, mode="application-demo-opening"
-            )
-            result = service.run(
-                predictions,
-                latest_snapshot,
-                mode="application-demo-latest",
-                previous_snapshot=opening_snapshot,
-            )
+            replay = run_demo_replay(store, self.config.demo_dir, "application-demo")
             audit_valid, audit_entries = store.verify_audit_chain()
+        result = replay.latest
         matches = [self._decision_view(item) for item in result.decisions]
         return self._result_payload(
             title="Reproducible assessment demo",
@@ -161,11 +148,11 @@ class ApplicationService:
             matches=matches,
             total_events=len(matches),
             prediction_status="demo",
-            predictions_loaded=len(predictions),
+            predictions_loaded=len(replay.predictions),
             unmatched_predictions=0,
             prediction_metadata={
                 "type": "synthetic_assessment_fixture",
-                "model_version": predictions[0].model_version,
+                "model_version": replay.predictions[0].model_version,
             },
             data_origin="DEMO",
             degraded=False,
@@ -181,6 +168,61 @@ class ApplicationService:
         region: str,
         snapshot: Mapping[str, Any],
     ) -> Dict[str, Any]:
+        valid_events, invalid_event_count = self._validated_events(sport_key, snapshot)
+        predictions, prediction_status, prediction_metadata = self._prediction_source(
+            sport_key, valid_events, snapshot
+        )
+        event_ids = {str(event["event_id"]) for event in valid_events}
+        unmatched_predictions = sum(
+            item.event_id not in event_ids for item in predictions
+        )
+        result: Optional[RunResult] = None
+        decisions: Dict[str, Decision] = {}
+        with StateStore(self.config.db_path) as store:
+            if predictions:
+                result = ReconciliationService(store).run(
+                    predictions, snapshot, mode="application-live"
+                )
+                decisions = {item.event_id: item for item in result.decisions}
+            audit_valid, audit_entries = store.verify_audit_chain()
+
+        matches = self._joined_match_views(
+            valid_events,
+            predictions,
+            decisions,
+            snapshot,
+        )
+        payload = self._result_payload(
+            title=str(SPORT_CONFIGS[sport_key]["title"]),
+            sport_key=sport_key,
+            region=region,
+            fetched_at=str(snapshot.get("fetched_at", "")) or None,
+            result=result,
+            matches=matches,
+            total_events=len(valid_events),
+            prediction_status=prediction_status,
+            predictions_loaded=len(predictions),
+            unmatched_predictions=unmatched_predictions,
+            prediction_metadata=prediction_metadata,
+            data_origin=str(snapshot.get("data_origin", "UNKNOWN")),
+            degraded=bool(snapshot.get("degraded", False)),
+            cache_age_seconds=float(snapshot.get("cache_age_seconds", 0.0) or 0.0),
+            quota=snapshot.get("quota") if isinstance(snapshot.get("quota"), dict) else {},
+            audit_valid=audit_valid,
+            audit_entries=audit_entries,
+        )
+        if invalid_event_count:
+            payload["warnings"].append(
+                f"{invalid_event_count} malformed provider event(s) were omitted "
+                "from the application view"
+            )
+        return payload
+
+    @staticmethod
+    def _validated_events(
+        sport_key: str,
+        snapshot: Mapping[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], int]:
         events = snapshot.get("data")
         if not isinstance(events, list):
             raise ValidationError("normalized odds snapshot is missing its event list")
@@ -214,30 +256,19 @@ class ApplicationService:
                 invalid_event_count += 1
                 continue
             valid_events.append(normalized_event)
-        predictions, prediction_status, prediction_metadata = self._prediction_source(
-            sport_key, valid_events, snapshot
-        )
-        event_ids = {
-            str(event.get("event_id"))
-            for event in valid_events
-        }
-        candidates = [item for item in predictions if item.event_id in event_ids]
-        unmatched_predictions = len(predictions) - len(candidates)
-        result: Optional[RunResult] = None
-        decisions: Dict[str, Decision] = {}
-        with StateStore(self.config.db_path) as store:
-            if predictions:
-                result = ReconciliationService(store).run(
-                    predictions, snapshot, mode="application-live"
-                )
-                decisions = {item.event_id: item for item in result.decisions}
-            audit_valid, audit_entries = store.verify_audit_chain()
+        return valid_events, invalid_event_count
 
+    def _joined_match_views(
+        self,
+        events: List[Mapping[str, Any]],
+        predictions: List[Prediction],
+        decisions: Mapping[str, Decision],
+        snapshot: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        event_ids = {str(event["event_id"]) for event in events}
         matches: List[Dict[str, Any]] = []
-        for event in valid_events:
-            event_id = event.get("event_id")
-            if not isinstance(event_id, str):
-                continue
+        for event in events:
+            event_id = str(event["event_id"])
             decision = decisions.get(event_id)
             if decision is not None:
                 view = self._decision_view(decision)
@@ -251,31 +282,7 @@ class ApplicationService:
             if decision is not None:
                 matches.append(self._decision_view(decision))
         matches.sort(key=self._match_sort_key)
-
-        payload = self._result_payload(
-            title=str(SPORT_CONFIGS[sport_key]["title"]),
-            sport_key=sport_key,
-            region=region,
-            fetched_at=str(snapshot.get("fetched_at", "")) or None,
-            result=result,
-            matches=matches,
-            total_events=len(valid_events),
-            prediction_status=prediction_status,
-            predictions_loaded=len(predictions),
-            unmatched_predictions=unmatched_predictions,
-            prediction_metadata=prediction_metadata,
-            data_origin=str(snapshot.get("data_origin", "UNKNOWN")),
-            degraded=bool(snapshot.get("degraded", False)),
-            cache_age_seconds=float(snapshot.get("cache_age_seconds", 0.0) or 0.0),
-            quota=snapshot.get("quota") if isinstance(snapshot.get("quota"), dict) else {},
-            audit_valid=audit_valid,
-            audit_entries=audit_entries,
-        )
-        if invalid_event_count:
-            payload["warnings"].append(
-                f"{invalid_event_count} malformed provider event(s) were omitted from the application view"
-            )
-        return payload
+        return matches
 
     @staticmethod
     def _result_payload(
@@ -434,7 +441,7 @@ class ApplicationHTTPServer(ThreadingHTTPServer):
 
 
 class ApplicationRequestHandler(BaseHTTPRequestHandler):
-    server_version = "SignalJudge/1.4"
+    server_version = f"SignalJudge/{__version__}"
     sys_version = ""
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
@@ -520,7 +527,6 @@ class ApplicationRequestHandler(BaseHTTPRequestHandler):
         status: HTTPStatus,
         content_type: str,
         body: bytes,
-        cache: bool = False,
     ) -> None:
         self.send_response(int(status))
         self.send_header("Content-Type", content_type)
@@ -537,7 +543,7 @@ class ApplicationRequestHandler(BaseHTTPRequestHandler):
             "connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
             "form-action 'none'",
         )
-        self.send_header("Cache-Control", "public, max-age=3600" if cache else "no-store")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         if body:
             try:

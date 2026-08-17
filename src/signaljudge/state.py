@@ -43,15 +43,6 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_event ON decisions(event_id, decision_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_run_rank ON decisions(run_id, final_rank);
-CREATE TABLE IF NOT EXISTS source_metrics (
-    run_id TEXT NOT NULL REFERENCES runs(run_id),
-    source TEXT NOT NULL,
-    brier REAL NOT NULL,
-    log_loss REAL NOT NULL,
-    accuracy REAL NOT NULL,
-    sample_size INTEGER NOT NULL,
-    PRIMARY KEY(run_id, source)
-);
 """
 
 
@@ -77,41 +68,27 @@ class StateStore:
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
 
-    def latest_snapshot(self, context_key: Optional[str] = None) -> Optional[Mapping[str, Any]]:
-        if context_key is None:
-            row = self.connection.execute(
-                "SELECT raw_snapshot_json FROM runs ORDER BY rowid DESC LIMIT 1"
-            ).fetchone()
-        else:
-            row = self.connection.execute(
-                "SELECT raw_snapshot_json FROM runs WHERE context_key = ? ORDER BY rowid DESC LIMIT 1",
-                (context_key,),
-            ).fetchone()
+    def latest_snapshot(self, context_key: str) -> Optional[Mapping[str, Any]]:
+        row = self.connection.execute(
+            "SELECT raw_snapshot_json FROM runs WHERE context_key = ? ORDER BY rowid DESC LIMIT 1",
+            (context_key,),
+        ).fetchone()
         return json.loads(row["raw_snapshot_json"]) if row else None
 
-    def latest_decisions(self, context_key: Optional[str] = None) -> Dict[str, Decision]:
-        if context_key is None:
-            rows = self.connection.execute(
-                """
-                SELECT d.* FROM decisions d
-                JOIN (SELECT event_id, MAX(decision_id) AS id FROM decisions GROUP BY event_id) latest
-                  ON latest.id = d.decision_id
-                """
-            ).fetchall()
-        else:
-            rows = self.connection.execute(
-                """
-                SELECT d.* FROM decisions d
-                JOIN runs r ON r.run_id = d.run_id
-                JOIN (
-                    SELECT d2.event_id, MAX(d2.decision_id) AS id
-                    FROM decisions d2 JOIN runs r2 ON r2.run_id = d2.run_id
-                    WHERE r2.context_key = ? GROUP BY d2.event_id
-                ) latest ON latest.id = d.decision_id
-                WHERE r.context_key = ?
-                """,
-                (context_key, context_key),
-            ).fetchall()
+    def latest_decisions(self, context_key: str) -> Dict[str, Decision]:
+        rows = self.connection.execute(
+            """
+            SELECT d.* FROM decisions d
+            JOIN runs r ON r.run_id = d.run_id
+            JOIN (
+                SELECT d2.event_id, MAX(d2.decision_id) AS id
+                FROM decisions d2 JOIN runs r2 ON r2.run_id = d2.run_id
+                WHERE r2.context_key = ? GROUP BY d2.event_id
+            ) latest ON latest.id = d.decision_id
+            WHERE r.context_key = ?
+            """,
+            (context_key, context_key),
+        ).fetchall()
         return {row["event_id"]: self._decision_from_row(row) for row in rows}
 
     def find_run(self, content_hash: str) -> Optional[str]:
@@ -220,25 +197,6 @@ class StateStore:
         except Exception:
             self.connection.rollback()
             raise
-
-    def save_metrics(self, run_id: str, metrics: Mapping[str, Mapping[str, float]]) -> None:
-        with self.connection:
-            for source, values in metrics.items():
-                self.connection.execute(
-                    """
-                    INSERT OR REPLACE INTO source_metrics
-                    (run_id, source, brier, log_loss, accuracy, sample_size)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        source,
-                        values["brier"],
-                        values["log_loss"],
-                        values["accuracy"],
-                        int(values["sample_size"]),
-                    ),
-                )
 
     def verify_audit_chain(self) -> Tuple[bool, int]:
         rows = self.connection.execute("SELECT * FROM decisions ORDER BY decision_id").fetchall()

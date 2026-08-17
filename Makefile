@@ -9,7 +9,7 @@ app:
 	PYTHONPATH=src $(PYTHON) -m signaljudge app --open
 
 train-models:
-	$(PYTHON) scripts/train_rating_models.py
+	PYTHONPATH=src $(PYTHON) scripts/train_rating_models.py
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v

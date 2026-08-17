@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from signaljudge.application import ApplicationConfig, ApplicationService, serve_application
+from signaljudge.demo import run_demo_replay
 from signaljudge.evaluation import evaluate
-from signaljudge.io import atomic_write_json, load_json, load_predictions, load_results
+from signaljudge.io import atomic_write_json, load_json, load_predictions
 from signaljudge.models import RunResult, ValidationError
 from signaljudge.provider import ALLOWED_REGIONS, ALLOWED_SPORTS, LiveOddsProvider
 from signaljudge.report import generate_dashboard, generate_live_dashboard
@@ -135,28 +136,29 @@ def command_demo(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).resolve()
     db_path = Path(args.db).resolve()
     demo_dir = resolve_demo_dir()
-    predictions = load_predictions(demo_dir / "model_predictions.json")
-    opening_snapshot = load_json(demo_dir / "odds_opening.json")
-    latest_snapshot = load_json(demo_dir / "odds_latest.json")
-    results = load_results(demo_dir / "results.json")
     with StateStore(db_path) as store:
-        service = ReconciliationService(store)
-        opening = service.run(predictions, opening_snapshot, mode="fixture-opening", previous_snapshot=None)
-        latest = service.run(predictions, latest_snapshot, mode="fixture-latest", previous_snapshot=opening_snapshot)
-        metrics, cases = evaluate(latest.decisions, results)
-        store.save_metrics(latest.run_id, metrics)
+        replay = run_demo_replay(store, demo_dir, "fixture")
+        metrics, cases = evaluate(replay.latest.decisions, replay.results)
         audit_valid, audit_entries = store.verify_audit_chain()
         history = store.run_history()
-    atomic_write_json(output_dir / "opening_ranking.json", _result_payload(opening))
-    atomic_write_json(output_dir / "latest_ranking.json", _result_payload(latest))
+    atomic_write_json(output_dir / "opening_ranking.json", _result_payload(replay.opening))
+    atomic_write_json(output_dir / "latest_ranking.json", _result_payload(replay.latest))
     atomic_write_json(
         output_dir / "audit.json",
         {"audit_chain_valid": audit_valid, "entries": audit_entries, "runs": history},
     )
     atomic_write_json(output_dir / "evaluation.json", {"metrics": metrics, "cases": cases})
-    generate_dashboard(output_dir / "report.html", opening, latest, metrics, cases, audit_valid, audit_entries)
-    _print_result(opening)
-    _print_result(latest)
+    generate_dashboard(
+        output_dir / "report.html",
+        replay.opening,
+        replay.latest,
+        metrics,
+        cases,
+        audit_valid,
+        audit_entries,
+    )
+    _print_result(replay.opening)
+    _print_result(replay.latest)
     print("\nReplay metrics (lower Brier/log loss is better):")
     for source, values in metrics.items():
         print(
@@ -170,7 +172,7 @@ def command_demo(args: argparse.Namespace) -> int:
     print(f"Dashboard: {output_dir / 'report.html'}")
     if args.serve:
         serve_report(output_dir / "report.html", args.port)
-    return _result_exit_code(latest, audit_valid)
+    return _result_exit_code(replay.latest, audit_valid)
 
 
 def command_run(args: argparse.Namespace) -> int:

@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
 from signaljudge.decision import DecisionConfig, reconcile, unresolved_decision
 from signaljudge.models import Decision, Prediction, RunResult, isoformat
-from signaljudge.odds import evaluated_at, fetched_at, normalize_all_detailed
+from signaljudge.odds import (
+    MarketQualityConfig,
+    evaluated_at,
+    fetched_at,
+    normalize_all_detailed,
+)
 from signaljudge.state import StateStore
 
 
@@ -45,9 +51,15 @@ def _prediction_payload(item: Prediction) -> Dict[str, Any]:
 
 
 class ReconciliationService:
-    def __init__(self, store: StateStore, config: DecisionConfig = DecisionConfig()):
+    def __init__(
+        self,
+        store: StateStore,
+        config: DecisionConfig = DecisionConfig(),
+        market_config: MarketQualityConfig = MarketQualityConfig(),
+    ):
         self.store = store
         self.config = config
+        self.market_config = market_config
 
     def run(
         self,
@@ -66,7 +78,8 @@ class ReconciliationService:
                 "predictions": [_prediction_payload(item) for item in predictions],
                 "snapshot": snapshot,
                 "previous_snapshot": previous_snapshot,
-                "config": self.config.__dict__,
+                "decision_config": asdict(self.config),
+                "market_config": asdict(self.market_config),
                 "context_key": context_key,
                 "mode": mode,
             },
@@ -80,7 +93,12 @@ class ReconciliationService:
             warnings = self.store.load_run_warnings(existing)
             return self._result(existing, mode, snapshot, decisions, warnings, reused=True)
 
-        markets, warnings, errors = normalize_all_detailed(snapshot, predictions, previous_snapshot)
+        markets, warnings, errors = normalize_all_detailed(
+            snapshot,
+            predictions,
+            previous_snapshot,
+            self.market_config,
+        )
         all_model_ranks = _ranks({p.event_id: p.model_probability for p in predictions})
         model_ranks = _ranks(
             {p.event_id: p.model_probability for p in predictions if p.event_id in markets}

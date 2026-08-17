@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from signaljudge.models import (
@@ -15,6 +16,24 @@ from signaljudge.models import (
     require_id,
     require_text,
 )
+
+
+@dataclass(frozen=True)
+class MarketQualityConfig:
+    policy_version: str = "1.0"
+    target_book_count: int = 5
+    freshness_half_life_seconds: float = 900.0
+    dispersion_scale: float = 0.12
+    coverage_weight: float = 0.45
+    freshness_weight: float = 0.30
+    dispersion_weight: float = 0.25
+    minimum_outlier_penalty: float = 0.60
+    degraded_source_penalty: float = 0.65
+    stale_after_seconds: float = 30 * 60
+    outlier_minimum_deviation: float = 0.06
+    outlier_mad_multiplier: float = 3.0
+    movement_detection_threshold: float = 0.02
+    coherent_book_delta: float = 0.01
 
 
 def implied_probability(price: float, odds_format: str) -> float:
@@ -119,13 +138,18 @@ def _book_probabilities(
     return probabilities, len(books)
 
 
-def _reject_outliers(rows: List[Tuple[str, float, float]]):
+def _reject_outliers(
+    rows: List[Tuple[str, float, float]], config: MarketQualityConfig
+):
     if len(rows) < 4:
         return rows, []
     values = [row[1] for row in rows]
     centre = statistics.median(values)
     mad = statistics.median([abs(value - centre) for value in values])
-    threshold = max(0.06, 3.0 * mad)
+    threshold = max(
+        config.outlier_minimum_deviation,
+        config.outlier_mad_multiplier * mad,
+    )
     kept = [row for row in rows if abs(row[1] - centre) <= threshold]
     rejected = [row[0] for row in rows if abs(row[1] - centre) > threshold]
     return (kept or rows), rejected
@@ -136,6 +160,7 @@ def normalize_market(
     prediction: Prediction,
     previous: Optional[NormalizedMarket] = None,
     event_index: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    config: MarketQualityConfig = MarketQualityConfig(),
 ) -> NormalizedMarket:
     events = event_index if event_index is not None else _event_index(snapshot)
     event = events.get(prediction.event_id)
@@ -149,20 +174,29 @@ def normalize_market(
     rows, total_books = _book_probabilities(event, prediction, snapshot_time, odds_format)
     if not rows:
         raise ValidationError(f"no valid h2h bookmaker prices for {prediction.event_id}")
-    kept, rejected = _reject_outliers(rows)
+    kept, rejected = _reject_outliers(rows, config)
     probabilities = [row[1] for row in kept]
     ages = [row[2] for row in kept]
     consensus = statistics.median(probabilities)
     dispersion = statistics.pstdev(probabilities) if len(probabilities) > 1 else 0.0
     median_age = statistics.median(ages)
-    coverage = min(1.0, len(kept) / 5.0)
-    freshness = statistics.mean([0.5 ** (age / 900.0) for age in ages])
-    dispersion_quality = max(0.0, 1.0 - dispersion / 0.12)
-    outlier_penalty = max(0.6, 1.0 - len(rejected) / max(1.0, len(rows) * 2.0))
+    coverage = min(1.0, len(kept) / config.target_book_count)
+    freshness = statistics.mean(
+        [0.5 ** (age / config.freshness_half_life_seconds) for age in ages]
+    )
+    dispersion_quality = max(0.0, 1.0 - dispersion / config.dispersion_scale)
+    outlier_penalty = max(
+        config.minimum_outlier_penalty,
+        1.0 - len(rejected) / max(1.0, len(rows) * 2.0),
+    )
     source_degraded = snapshot.get("degraded") is True
-    degraded_penalty = 0.65 if source_degraded else 1.0
+    degraded_penalty = config.degraded_source_penalty if source_degraded else 1.0
     quality = clamp(
-        (0.45 * coverage + 0.30 * freshness + 0.25 * dispersion_quality)
+        (
+            config.coverage_weight * coverage
+            + config.freshness_weight * freshness
+            + config.dispersion_weight * dispersion_quality
+        )
         * outlier_penalty
         * degraded_penalty
     )
@@ -177,9 +211,13 @@ def normalize_market(
             for book, probability in per_book.items()
             if book in previous.per_book
         ]
-        if abs(movement) >= 0.02 and common_deltas:
+        if abs(movement) >= config.movement_detection_threshold and common_deltas:
             direction = 1 if movement > 0 else -1
-            coherent = sum(1 for delta in common_deltas if direction * delta >= 0.01)
+            coherent = sum(
+                1
+                for delta in common_deltas
+                if direction * delta >= config.coherent_book_delta
+            )
             coherence = coherent / len(common_deltas)
 
     try:
@@ -197,7 +235,7 @@ def normalize_market(
         rejected_books=rejected,
         dispersion=dispersion,
         median_age_seconds=median_age,
-        stale=median_age > 30 * 60,
+        stale=median_age > config.stale_after_seconds,
         per_book=per_book,
         movement=movement,
         movement_coherence=coherence,
@@ -207,19 +245,11 @@ def normalize_market(
     )
 
 
-def normalize_all(
-    snapshot: Mapping[str, Any],
-    predictions: List[Prediction],
-    previous_snapshot: Optional[Mapping[str, Any]] = None,
-) -> Tuple[Dict[str, NormalizedMarket], List[str]]:
-    markets, warnings, _ = normalize_all_detailed(snapshot, predictions, previous_snapshot)
-    return markets, warnings
-
-
 def normalize_all_detailed(
     snapshot: Mapping[str, Any],
     predictions: List[Prediction],
     previous_snapshot: Optional[Mapping[str, Any]] = None,
+    config: MarketQualityConfig = MarketQualityConfig(),
 ) -> Tuple[Dict[str, NormalizedMarket], List[str], Dict[str, str]]:
     markets: Dict[str, NormalizedMarket] = {}
     warnings: List[str] = []
@@ -242,13 +272,20 @@ def normalize_all_detailed(
         if use_previous and previous_events is not None and prediction.event_id in previous_events:
             try:
                 previous = normalize_market(
-                    previous_snapshot, prediction, event_index=previous_events  # type: ignore[arg-type]
+                    previous_snapshot,
+                    prediction,
+                    event_index=previous_events,  # type: ignore[arg-type]
+                    config=config,
                 )
             except ValidationError as exc:
                 warnings.append(f"previous market ignored for {prediction.event_id}: {exc}")
         try:
             markets[prediction.event_id] = normalize_market(
-                snapshot, prediction, previous, event_index=current_events
+                snapshot,
+                prediction,
+                previous,
+                event_index=current_events,
+                config=config,
             )
         except ValidationError as exc:
             message = str(exc)

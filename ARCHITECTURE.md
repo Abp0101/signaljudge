@@ -16,7 +16,7 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 | Market normalizer | Converts odds, removes margin, rejects outliers | Event becomes a warning if no valid market remains |
 | Decision engine | Applies gates, weights, winner, abstention and rationale | Deterministic for the same versioned input |
 | Orchestrator | Matches, compares, ranks and persists | Idempotent content hash prevents duplicate run |
-| SQLite store | Scoped snapshots, revisions, decision and run audit chains, metrics | Immediate transaction prevents partial or interleaved persistence |
+| SQLite store | Scoped snapshots, revisions, and decision and run audit chains | Immediate transaction prevents partial or interleaved persistence |
 | Replay/live dashboard | Fixture identity, kickoff, probabilities, time state and counterfactual comparison | Static output remains viewable without services |
 | Local application API | Sport selection, fixture/prediction join, bounded refresh and browser view model | Missing predictions remain visible; invalid input fails closed |
 | Operator console | Sort/filter current fixtures and inspect complete rationale | Demo mode remains usable when live service is unavailable |

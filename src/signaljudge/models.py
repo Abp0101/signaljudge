@@ -135,13 +135,6 @@ class Prediction:
 
 
 @dataclass(frozen=True)
-class BookProbability:
-    bookmaker: str
-    probability: float
-    age_seconds: float
-
-
-@dataclass(frozen=True)
 class NormalizedMarket:
     event_id: str
     selection: str

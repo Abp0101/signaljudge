@@ -6,6 +6,8 @@ from pathlib import Path
 from signaljudge.io import load_json
 from signaljudge.models import ValidationError
 from signaljudge.prediction_models import Fixture, RatingModel
+from signaljudge.rating import elo_outcome_probabilities
+from scripts.train_rating_models import Parameters, probabilities
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,20 @@ ARTIFACT = ROOT / "models" / "soccer_epl.model.json"
 
 
 class RatingModelTests(unittest.TestCase):
+    def test_training_and_inference_share_the_same_elo_forecast(self):
+        parameters = Parameters(24.0, 70.0, 0.28, 2000.0)
+        training = probabilities(1610.0, 1490.0, parameters)
+        serving = elo_outcome_probabilities(
+            1610.0,
+            1490.0,
+            parameters.home_advantage,
+            parameters.draw_base,
+            parameters.draw_scale,
+            parameters.minimum_draw,
+            parameters.maximum_draw,
+        )
+        self.assertEqual(training, serving)
+
     def setUp(self):
         self.model = RatingModel.load(ARTIFACT)
         self.generated_at = datetime(2026, 8, 16, 15, 0, tzinfo=timezone.utc)

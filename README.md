@@ -59,7 +59,7 @@ confirm the audit badge. `make check` then exercises the same invariants in CI.
 | Brief requirement | Verifiable evidence |
 | --- | --- |
 | Local model or file plus live public odds; compare the same events and identify at least three material disagreements | The live application combines the odds-independent EPL artifact with The Odds API using exact event identity. The offline acceptance fixture produces six material conflicts. |
-| Explicitly choose a source, explain every choice, and correct a failure caused by blindly trusting either source | Policy `2.1` records `MODEL`, `MARKET`, or `ABSTAIN`, structured reason codes, weights, and rationale. Settled-outcome replay corrects both a model-only and a market-only failure. |
+| Explicitly choose a source, explain every choice, and correct a failure caused by blindly trusting either source | Policy `2.2` records `MODEL`, `MARKET`, or `ABSTAIN`, structured reason codes, weights, and rationale. Settled-outcome replay corrects both a model-only and a market-only failure. |
 | Maintain batch state, update confidence with new data, and output a ranked full audit trail | Two snapshots update market movement, source confidence, previous probability, winner, and rank in SQLite. JSON and HTML expose every score and rationale; decision and run hash chains verify 16 replay entries. |
 
 Live mode proves the external integration; the deterministic replay proves required
@@ -351,7 +351,7 @@ predictions for exact upcoming fixtures. See `predictions/README.md` for precede
 
 ## State and auditability
 
-SQLite stores runs, raw snapshots, decisions, source metrics and links between revisions. State is scoped by sport, model version and market type. Processing identical complete input is idempotent; the hash includes every prediction field, current and previous snapshots, mode, policy version and configuration.
+SQLite stores runs, raw snapshots, decisions and links between revisions. State is scoped by sport, model version and market type. Processing identical complete input is idempotent; the hash includes every prediction field, current and previous snapshots, mode, policy version and configuration.
 
 Decisions are append-only. Each audit hash is:
 

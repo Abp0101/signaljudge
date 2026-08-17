@@ -7,7 +7,7 @@ APP_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Auditable sports prediction reconciliation">
   <title>SignalJudge · Live decision console</title>
-  <link rel="stylesheet" href="/assets/app.css?v=1.4.0">
+  <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
   <main>
@@ -97,7 +97,7 @@ APP_HTML = """<!doctype html>
       <p id="run-id"></p>
     </footer>
   </main>
-  <script src="/assets/app.js?v=1.4.0" defer></script>
+  <script src="/assets/app.js" defer></script>
 </body>
 </html>
 """

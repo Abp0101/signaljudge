@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
+from signaljudge.rating import (
+    DEFAULT_RATING,
+    elo_outcome_probabilities,
+    expected_home_score,
+)
+
 
 SOURCES = (
     "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
@@ -33,7 +39,6 @@ ALIASES = {
     "Manchester United": "Man United",
     "Newcastle United": "Newcastle",
     "Nottingham Forest": "Nott'm Forest",
-    "Sheffield United": "Sheffield United",
     "Tottenham Hotspur": "Tottenham",
     "West Ham United": "West Ham",
     "Wolverhampton Wanderers": "Wolves",
@@ -105,27 +110,23 @@ def parse_matches(body: bytes) -> List[Match]:
 
 
 def probabilities(home_rating: float, away_rating: float, params: Parameters) -> Dict[str, float]:
-    gap = home_rating + params.home_advantage - away_rating
-    home_without_draw = 1.0 / (1.0 + 10.0 ** (-gap / 400.0))
-    draw = max(
+    return elo_outcome_probabilities(
+        home_rating,
+        away_rating,
+        params.home_advantage,
+        params.draw_base,
+        params.draw_scale,
         params.minimum_draw,
-        min(params.maximum_draw, params.draw_base - abs(gap) / params.draw_scale),
+        params.maximum_draw,
     )
-    return {
-        "H": (1.0 - draw) * home_without_draw,
-        "D": draw,
-        "A": (1.0 - draw) * (1.0 - home_without_draw),
-    }
 
 
 def update_ratings(
     ratings: Dict[str, float], appearances: Dict[str, int], match: Match, params: Parameters
 ) -> None:
-    home_rating = ratings.setdefault(match.home, 1500.0)
-    away_rating = ratings.setdefault(match.away, 1500.0)
-    expected = 1.0 / (
-        1.0 + 10.0 ** (-(home_rating + params.home_advantage - away_rating) / 400.0)
-    )
+    home_rating = ratings.setdefault(match.home, DEFAULT_RATING)
+    away_rating = ratings.setdefault(match.away, DEFAULT_RATING)
+    expected = expected_home_score(home_rating, away_rating, params.home_advantage)
     actual = 1.0 if match.result == "H" else 0.5 if match.result == "D" else 0.0
     goal_multiplier = 1.0 + 0.15 * max(0, abs(match.home_goals - match.away_goals) - 1)
     change = params.k_factor * goal_multiplier * (actual - expected)
@@ -150,7 +151,9 @@ def evaluate(
     records: List[Tuple[Dict[str, float], str, str, float]] = []
     for match in evaluation:
         prediction = probabilities(
-            ratings.get(match.home, 1500.0), ratings.get(match.away, 1500.0), params
+            ratings.get(match.home, DEFAULT_RATING),
+            ratings.get(match.away, DEFAULT_RATING),
+            params,
         )
         selected, selected_probability = max(
             prediction.items(), key=lambda item: (item[1], item[0])

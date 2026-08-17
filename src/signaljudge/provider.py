@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
+from signaljudge import __version__
 from signaljudge.io import atomic_write_json, load_json
 from signaljudge.models import ValidationError, isoformat, parse_datetime
 
@@ -64,7 +65,6 @@ def _normalize_v4_payload(
             {
                 "event_id": event.get("id"),
                 "sport_key": event.get("sport_key"),
-                "league": event.get("sport_title"),
                 "home_team": event.get("home_team"),
                 "away_team": event.get("away_team"),
                 "start_time": event.get("commence_time"),
@@ -130,7 +130,10 @@ class LiveOddsProvider:
         )
         url = f"{API_BASE_URL}/sports/{sport_key}/odds/?{query}"
         cache_path = self.cache_dir / f"{sport_key}-{selected_region}.json"
-        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.4"}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": f"SignalJudge/{__version__}",
+        }
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):
