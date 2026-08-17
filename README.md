@@ -427,15 +427,31 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for deeper trade-offs and [SECURITY.md](S
 
 ## Current limitations
 
+### Biggest limitation: the reconciliation policy is not yet empirically fitted
+
+The source-selection policy uses hand-designed reliability factors and safety gates.
+The eight-event settled replay proves that the workflow can reject both blindly
+model-led and blindly market-led decisions, but it is synthetic and too small to show
+that the policy will outperform either source on unseen real-world events. Likewise,
+the live EPL view proves the integration and audit path—not predictive superiority or
+profitability. The current coefficients should therefore be treated as transparent,
+versioned engineering hypotheses rather than learned truths.
+
+The risk is constrained today by keeping model and odds inputs independent, removing
+vig and isolated bookmaker outliers, reducing reliability for stale or weak evidence,
+abstaining when both sources are unsafe, and recording every factor behind a choice.
+The next validation step is a leakage-safe corpus containing pre-kickoff model
+forecasts, timestamped market snapshots and settled outcomes. Policy parameters would
+be tuned only on chronological training data, calibrated on a later validation window,
+then compared on a locked test window against model-only, market-only and simple-blend
+baselines using Brier score, log loss, calibration error and confidence intervals.
+
 - **The live trained model covers EPL only.** MLB and NBA fixtures remain visible but
   correctly show `model missing`; inventing scores would violate source independence.
 - **Elo is a deliberately small baseline.** It learns team strength, home advantage,
   draws, and goal-margin effects, but not injuries, line-ups, expected goals, rest,
   transfers, weather, or tactical match-ups. Its 48.2% three-way holdout accuracy is
   reported rather than hidden.
-- **The reconciliation reliability formula is designed, not learned.** Its factors and
-  safety gates are defensible and versioned, but they have not been fitted on a large,
-  representative corpus of model/market/outcome triples.
 - **The eight-event replay is synthetic and small.** It proves required branches and
   blind-baseline corrections; its 100% binary selection accuracy is not evidence of
   real-world performance or complete three-way outcome accuracy.
