@@ -192,7 +192,7 @@ flowchart LR
     D --> C
     C --> E["Detect probability and rank conflicts"]
     E --> F["Apply quality gates and reliability rule"]
-    F --> G["Choose MODEL or MARKET"]
+    F --> G["Choose MODEL, MARKET, or ABSTAIN"]
     G --> H["Persist decision revision and audit hash"]
     H --> I["Re-rank and report"]
     I --> J["Replay against settled outcomes"]
