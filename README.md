@@ -2,6 +2,8 @@
 
 **Auditable reconciliation when a sports model and the live market disagree.**
 
+[![CI](https://github.com/Abp0101/signaljudge/actions/workflows/ci.yml/badge.svg)](https://github.com/Abp0101/signaljudge/actions/workflows/ci.yml)
+
 SignalJudge takes independently produced sports predictions, fetches or loads bookmaker odds for the same events, removes bookmaker margin, measures the quality of both signals, explicitly chooses `MODEL`, `MARKET`, or a safety-first `ABSTAIN`, and emits a reconciled ranking with a tamper-evident audit trail.
 
 It is deliberately deterministic: the numerical decision is reproducible, testable, and never delegated to an LLM.
@@ -25,12 +27,44 @@ The command runs two odds snapshots, writes durable state, evaluates both blind 
 - `artifacts/evaluation.json` — model-only, market-only and agent metrics
 - `artifacts/audit.json` — run history and audit verification
 
+Expected deterministic result:
+
+```text
+Material conflicts: 6
+Model wins: 2 | Market wins: 6
+MODEL  Brier=0.227  SelectionAccuracy=75.0%
+MARKET Brier=0.170  SelectionAccuracy=87.5%
+AGENT  Brier=0.145  SelectionAccuracy=100.0%
+Blind-source errors corrected: 3
+Audit chain: VALID (16 entries)
+```
+
+These figures describe only the documented eight-event synthetic fixture. They
+demonstrate the required behaviour and are not a claim of real-world predictive
+performance.
+
 Open the dashboard directly, or serve it locally:
 
 ```bash
 PYTHONPATH=src python3 -m signaljudge serve
 # http://127.0.0.1:8765/report.html
 ```
+
+For a time-constrained review: run `make demo`, move the report timeline between
+the opening and latest snapshots, inspect the three blind-source corrections, and
+confirm the audit badge. `make check` then exercises the same invariants in CI.
+
+## Assessment coverage
+
+| Brief requirement | Verifiable evidence |
+| --- | --- |
+| Local model or file plus live public odds; compare the same events and identify at least three material disagreements | The live application combines the odds-independent EPL artifact with The Odds API using exact event identity. The offline acceptance fixture produces six material conflicts. |
+| Explicitly choose a source, explain every choice, and correct a failure caused by blindly trusting either source | Policy `2.1` records `MODEL`, `MARKET`, or `ABSTAIN`, structured reason codes, weights, and rationale. Settled-outcome replay corrects both a model-only and a market-only failure. |
+| Maintain batch state, update confidence with new data, and output a ranked full audit trail | Two snapshots update market movement, source confidence, previous probability, winner, and rank in SQLite. JSON and HTML expose every score and rationale; decision and run hash chains verify 16 replay entries. |
+
+Live mode proves the external integration; the deterministic replay proves required
+decision branches without depending on network availability or changing bookmaker
+prices. Both paths use the same reconciliation service.
 
 ## Interactive application
 
@@ -52,6 +86,20 @@ Or use `make app`. The application offers two modes:
   trained rating model. An exact prediction file can override a model artifact.
 - **Assessment demo** runs the bundled, reproducible two-snapshot fixture without
   a network connection or API key.
+
+### Why NBA and MLB show `model missing`
+
+The live provider supports NBA and MLB fixtures and odds, but this repository does
+not ship trained models for those sports. No authorised, reproducible NBA or MLB
+results pipeline was selected and validated within the assessment scope. SignalJudge
+therefore keeps the fixtures visible and explicitly reports `model missing` instead of
+deriving a supposedly independent score from bookmaker prices or inventing confidence
+values. This is an intentional fail-closed state, not an API or application failure.
+
+An independent model can be added without changing the reconciliation engine by
+providing `predictions/basketball_nba.json`, `predictions/baseball_mlb.json`, or a
+validated sport-specific artifact. The next-step plan is to train separate models with
+sport-appropriate features and chronological holdout metrics.
 
 For local convenience, `app` also checks `.env` when the variable is not already
 exported. It parses only a literal `THE_ODDS_API_KEY` assignment; it does not execute
@@ -104,24 +152,8 @@ make train-models
 ```
 
 Manual files in `predictions/<sport_key>.json` take precedence, allowing a stronger
-external model to be connected without changing the reconciliation engine. NBA and
-MLB currently remain explicit `model missing` states: the odds and fixtures work,
-but SignalJudge will not assign invented scores until an authorised, reproducible
-results source and validated artifact are added.
-
-Expected replay result:
-
-```text
-Material conflicts: 6
-Model wins: 2 | Market wins: 6
-MODEL  Brier=0.227  SelectionAccuracy=75.0%
-MARKET Brier=0.170  SelectionAccuracy=87.5%
-AGENT  Brier=0.145  SelectionAccuracy=100.0%
-Blind-source errors corrected: 3
-Audit chain: VALID (16 entries)
-```
-
-These figures describe only the documented eight-event synthetic fixture. They demonstrate behaviour; they are not a claim of real-world predictive performance.
+external model to be connected without changing the reconciliation engine. The NBA
+and MLB availability decision is explained above and remains visible in the UI.
 
 ## Engineering evolution
 
