@@ -146,9 +146,14 @@ distribution, which activates the existing decision safety gate.
 - Sport and bookmaker region are selected from fixed allowlists; EPL defaults to UK books.
 - Soccer head-to-head normalization removes margin across home, away and draw outcomes.
 - Run IDs derive from canonical input content for idempotency.
-- Canonical input includes all prediction fields, current and previous snapshots, context and policy configuration.
+- Canonical input includes all prediction fields, including optional source-data time,
+  current and previous snapshots, context and policy configuration.
+- Model inference time and underlying source-data time are distinct; reliability decays
+  with both and the audit rationale flags aged model data.
 - Previous state is scoped by sport, model version and market type; a new event does not require historical odds.
 - Unavailable markets and dual-source safety failures remain visible as unranked abstentions.
+- Prediction-file entries absent from the provider snapshot remain visible as individually
+  audited unresolved decisions rather than only an aggregate unmatched count.
 - Decisions are stored transactionally and linked to prior event decisions.
 - Decision and run-envelope audit entries form hash chains starting from `GENESIS`.
 

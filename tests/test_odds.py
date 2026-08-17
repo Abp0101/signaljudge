@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from signaljudge.models import Prediction
-from signaljudge.decision import reconcile
+from signaljudge.decision import model_reliability, reconcile
 from signaljudge.odds import implied_probability, normalize_market
 
 
@@ -96,6 +96,18 @@ class OddsTests(unittest.TestCase):
         self.assertEqual(decision.winner, "ABSTAIN")
         self.assertEqual(decision.status, "ABSTAINED")
         self.assertIsNone(decision.reconciled_probability)
+
+    def test_model_reliability_accounts_for_source_data_age(self):
+        as_of = datetime(2026, 8, 16, 18, 0, tzinfo=timezone.utc)
+        current = replace(
+            prediction(),
+            source_data_at=datetime(2026, 8, 16, 10, 0, tzinfo=timezone.utc),
+        )
+        older = replace(
+            prediction(),
+            source_data_at=datetime(2025, 8, 16, 18, 0, tzinfo=timezone.utc),
+        )
+        self.assertLess(model_reliability(older, as_of), model_reliability(current, as_of))
 
     def test_normalizes_three_way_soccer_draw_market(self):
         model = Prediction.from_dict(

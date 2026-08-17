@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -78,6 +78,12 @@ class RatingModel:
         model_version = require_id(payload.get("model_version"), "model.model_version")
         trained_at = parse_datetime(payload.get("trained_at"), "model.trained_at")
         training_cutoff = require_text(payload.get("training_cutoff"), "model.training_cutoff", 64)
+        try:
+            training_cutoff_date = date.fromisoformat(training_cutoff)
+        except ValueError as exc:
+            raise ValidationError("model.training_cutoff must be an ISO date") from exc
+        if training_cutoff_date > trained_at.date():
+            raise ValidationError("model.training_cutoff must not be after model.trained_at")
         outcome_mode = payload.get("outcome_mode")
         if outcome_mode not in {"binary", "three_way"}:
             raise ValidationError("model.outcome_mode must be binary or three_way")
@@ -155,12 +161,25 @@ class RatingModel:
         for source in sources:
             if not isinstance(source, dict):
                 raise ValidationError("model training source must be an object")
+            try:
+                rows = int(source.get("rows"))
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("model.source.rows must be an integer") from exc
+            if not 1 <= rows <= 10_000_000:
+                raise ValidationError("model.source.rows is outside the allowed range")
+            raw_fields = source.get("fields_used")
+            if not isinstance(raw_fields, list) or not 1 <= len(raw_fields) <= 100:
+                raise ValidationError("model.source.fields_used must be a bounded list")
+            fields = [require_id(field, "model.source.field") for field in raw_fields]
+            sha256 = require_id(source.get("sha256"), "model.source.sha256")
+            if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
+                raise ValidationError("model.source.sha256 must be a lowercase SHA-256 digest")
             safe_sources.append(
                 {
                     "url": require_text(source.get("url"), "model.source.url", 500),
-                    "sha256": require_id(source.get("sha256"), "model.source.sha256"),
-                    "rows": int(source.get("rows", 0)),
-                    "fields_used": list(source.get("fields_used", [])),
+                    "sha256": sha256,
+                    "rows": rows,
+                    "fields_used": fields,
                 }
             )
 
@@ -198,6 +217,9 @@ class RatingModel:
 
     def predict(self, fixtures: List[Fixture], generated_at: datetime) -> List[Prediction]:
         predictions: List[Prediction] = []
+        source_data_at = datetime.combine(
+            date.fromisoformat(self.training_cutoff), time.max
+        ).replace(tzinfo=timezone.utc)
         for fixture in fixtures:
             if fixture.sport_key != self.sport_key or generated_at >= fixture.commence_time:
                 continue
@@ -251,6 +273,7 @@ class RatingModel:
                     generated_at=generated_at,
                     model_version=self.model_version,
                     out_of_distribution=out_of_distribution,
+                    source_data_at=source_data_at,
                 )
             )
         return predictions

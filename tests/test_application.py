@@ -97,6 +97,37 @@ class ApplicationTests(unittest.TestCase):
             all(item["status"] == "NO_PREDICTION" for item in payload["matches"])
         )
 
+    def test_unmatched_input_prediction_is_individually_audited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service, _provider = self._service(root)
+            path = service.config.prediction_dir / "baseball_mlb.json"
+            prediction_file = load_json(path)
+            unmatched = dict(prediction_file["predictions"][0])
+            unmatched.update(
+                {
+                    "event_id": "input-only-event",
+                    "home_team": "Input Home",
+                    "away_team": "Input Away",
+                    "selection": "Input Home",
+                    "commence_time": "2026-08-18T20:00:00Z",
+                }
+            )
+            prediction_file["predictions"].append(unmatched)
+            path.write_text(json.dumps(prediction_file), encoding="utf-8")
+            payload = service.live_rankings("baseball_mlb", "us")
+
+        audited = [
+            item for item in payload["matches"] if item["event_id"] == "input-only-event"
+        ]
+        self.assertEqual(payload["total_events"], 8)
+        self.assertEqual(payload["prediction_source"]["unmatched"], 1)
+        self.assertEqual(len(audited), 1)
+        self.assertEqual(audited[0]["status"], "UNRESOLVED")
+        self.assertEqual(audited[0]["winner"], "ABSTAIN")
+        self.assertIn("no valid matching market evidence", audited[0]["rationale"])
+        self.assertTrue(payload["audit"]["valid"])
+
     def test_malformed_provider_event_is_omitted_from_unpredicted_view(self):
         with tempfile.TemporaryDirectory() as directory:
             service, provider = self._service(Path(directory), with_predictions=False)

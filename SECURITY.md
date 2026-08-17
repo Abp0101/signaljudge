@@ -33,7 +33,7 @@ Untrusted inputs:
 | SSRF through configurable URL | Fixed HTTPS base URL plus sport-key and bookmaker-region allowlists |
 | Malformed or oversized input | Strict types/ranges, identifier constraints, record and byte limits |
 | Unsafe deserialization | JSON only; no pickle, YAML object construction or dynamic imports |
-| Model artifact tampering | Strict schema/range/alias/provenance validation; invalid artifacts fail closed |
+| Model artifact tampering | Strict schema/range/alias/provenance validation, including bounded source rows and fields plus exact SHA-256 shape; invalid artifacts fail closed |
 | Training data leakage | Fixed source URLs; trainer parses only six result fields and discards every odds column |
 | Market leakage into model | Fixture-only inference object excludes books, prices, movement and market probabilities |
 | Post-start backfill | Local model skips fixtures whose kickoff is not strictly after generation time |

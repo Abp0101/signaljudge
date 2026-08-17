@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from signaljudge.io import load_json
 from signaljudge.models import ValidationError
 from signaljudge.prediction_models import Fixture, RatingModel
 
@@ -46,6 +47,7 @@ class RatingModelTests(unittest.TestCase):
         self.assertEqual(first.selection, second.selection)
         self.assertEqual(first.model_probability, second.model_probability)
         self.assertEqual(first.model_version, "elo-soccer-v1-2026-08")
+        self.assertEqual(first.source_data_at.date().isoformat(), "2026-05-24")
 
     def test_known_aliases_are_in_distribution_and_unknown_team_is_flagged(self):
         known = self.model.predict(
@@ -70,6 +72,16 @@ class RatingModelTests(unittest.TestCase):
             "model_type": "elo_rating",
             "sport_key": "soccer_epl",
         }
+        with self.assertRaises(ValidationError):
+            RatingModel.from_dict(copy.deepcopy(payload))
+
+    def test_malformed_source_provenance_fails_closed(self):
+        payload = load_json(ARTIFACT)
+        payload["sources"][0]["rows"] = -1
+        with self.assertRaises(ValidationError):
+            RatingModel.from_dict(copy.deepcopy(payload))
+        payload = load_json(ARTIFACT)
+        payload["sources"][0]["fields_used"] = "Date"
         with self.assertRaises(ValidationError):
             RatingModel.from_dict(copy.deepcopy(payload))
 

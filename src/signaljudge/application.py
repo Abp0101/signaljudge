@@ -226,9 +226,9 @@ class ApplicationService:
         result: Optional[RunResult] = None
         decisions: Dict[str, Decision] = {}
         with StateStore(self.config.db_path) as store:
-            if candidates:
+            if predictions:
                 result = ReconciliationService(store).run(
-                    candidates, snapshot, mode="application-live"
+                    predictions, snapshot, mode="application-live"
                 )
                 decisions = {item.event_id: item for item in result.decisions}
             audit_valid, audit_entries = store.verify_audit_chain()
@@ -244,6 +244,12 @@ class ApplicationService:
             else:
                 view = self._unpredicted_event_view(event, snapshot)
             matches.append(view)
+        for prediction in predictions:
+            if prediction.event_id in event_ids:
+                continue
+            decision = decisions.get(prediction.event_id)
+            if decision is not None:
+                matches.append(self._decision_view(decision))
         matches.sort(key=self._match_sort_key)
 
         payload = self._result_payload(
@@ -253,7 +259,7 @@ class ApplicationService:
             fetched_at=str(snapshot.get("fetched_at", "")) or None,
             result=result,
             matches=matches,
-            total_events=len(matches),
+            total_events=len(valid_events),
             prediction_status=prediction_status,
             predictions_loaded=len(predictions),
             unmatched_predictions=unmatched_predictions,

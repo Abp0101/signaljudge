@@ -114,16 +114,40 @@ Expected replay result:
 ```text
 Material conflicts: 6
 Model wins: 2 | Market wins: 6
-MODEL  Brier=0.227  Accuracy=75.0%
-MARKET Brier=0.170  Accuracy=87.5%
-AGENT  Brier=0.145  Accuracy=100.0%
+MODEL  Brier=0.227  SelectionAccuracy=75.0%
+MARKET Brier=0.170  SelectionAccuracy=87.5%
+AGENT  Brier=0.145  SelectionAccuracy=100.0%
 Blind-source errors corrected: 3
 Audit chain: VALID (16 entries)
 ```
 
 These figures describe only the documented eight-event synthetic fixture. They demonstrate behaviour; they are not a claim of real-world predictive performance.
 
+## Engineering evolution
+
+The project was developed in deliberate passes. Each pass addressed a weakness that
+would otherwise make the assessment difficult to trust or operate:
+
+| Earlier weakness | Why it mattered | Improvement made |
+| --- | --- | --- |
+| The first reliable evidence path was fixture-driven and CLI-first | A synthetic replay proves behaviour, not that the provider and operator workflow work end to end | Corrected and hardened the live V4 adapter, then added an interactive application while retaining the offline demo as a deterministic acceptance test |
+| Provider input and failures were an external trust boundary | Malformed responses, unbounded payloads, retry storms, or secret-bearing URLs could undermine the run | Added schema validation, allowlisted sports/regions/hostname, response limits, timeouts, bounded retry with `Retry-After`, quota metadata, sanitized errors, and an explicitly degraded last-known-good cache |
+| A decision could be forced even when neither source was safe | “Always choose something” creates false confidence | Added `ABSTAIN` and `UNRESOLVED` outcomes plus gates for stale/thin markets, out-of-distribution predictions, provider degradation, and insufficient reliability |
+| A decision-level audit did not fully bind the surrounding run evidence | Changing a raw snapshot or denormalised ranking could make stored evidence disagree with the explanation | Persisted raw snapshots and revisions, expanded idempotent content hashes, hardened transactional writes and schema migration, and added a run-level chain over each ordered decision chain |
+| The early output emphasised a selection more than its fixture | A team name without its opponent, kickoff, sport, or data origin is not operationally useful | Added complete fixture identity, kickoff and opponent context, source status, sorting, filtering, refresh controls, and visible `NO_PREDICTION` states |
+| Static prediction files demonstrated reconciliation but not a connected trained model | It left model provenance and market independence implicit | Added a reproducible EPL Elo trainer, a versioned validated artifact, chronological holdout metrics, exact provider aliases, and an inference boundary that cannot read odds |
+| A single-source baseline could look adequate without settled outcomes | The key failure case in the brief would be asserted rather than measured | Added replay evaluation against outcomes using accuracy, Brier score, and explicit cases corrected relative to both blind baselines |
+
+The result is intentionally a bounded system: live mode demonstrates real integration,
+while the offline replay demonstrates decision behaviour repeatably. Neither is used to
+make unsupported claims about future profitability.
+
 ## What the agent does
+
+Here, **agent** means a bounded autonomous decision controller, not an LLM. It
+observes two independent signals, executes a versioned plan, maintains state, chooses
+an action, and records why. Keeping numerical source selection deterministic makes the
+same complete input produce the same auditable decision.
 
 ```mermaid
 flowchart LR
@@ -161,9 +185,16 @@ SignalJudge then rejects isolated bookmaker outliers and uses the median fair pr
 
 ### 2. Reliability
 
-Model reliability considers historical accuracy, validation sample size, calibration error, prediction age, and whether the prediction is outside the model's validated distribution.
+Model reliability considers historical accuracy, validation sample size, calibration
+error, inference age, underlying source-data age, and whether the prediction is outside
+the model's validated distribution. A model artifact therefore does not become “fresh”
+merely because inference ran against a new market snapshot.
 
 Market reliability considers valid-book coverage, odds freshness, cross-book dispersion, and rejected outliers.
+
+Both values are versioned **policy scores**, not claimed probabilities of correctness.
+The market score has an explicit `0.72` ceiling in `DecisionConfig`; fitting that ceiling
+and the remaining coefficients requires a larger chronological settled-outcome corpus.
 
 ```text
 model weight  = model reliability × applicable safety gate
@@ -223,12 +254,17 @@ Prediction files use schema version 1:
     "historical_sample_size": 240,
     "calibration_error": 0.04,
     "generated_at": "2026-08-17T09:00:00Z",
+    "source_data_at": "2026-08-16T23:59:59Z",
     "model_version": "my-model-1"
   }]
 }
 ```
 
-The `event_id`, sport, teams and start time must match. SignalJudge refuses ambiguous identity rather than fuzzy-matching the wrong event. Soccer predictions may select the home team, away team or `Draw`; bookmaker margin is removed across all three outcomes.
+The `event_id`, sport, teams and start time must match. `source_data_at` is optional for
+external files and records when the newest underlying model feature was available; when
+present it must not be later than `generated_at`. SignalJudge refuses ambiguous identity
+rather than fuzzy-matching the wrong event. Soccer predictions may select the home team,
+away team or `Draw`; bookmaker margin is removed across all three outcomes.
 
 ```bash
 PYTHONPATH=src python3 -m signaljudge run \
@@ -318,8 +354,10 @@ The suite covers:
 - localhost Host-header and same-origin API enforcement;
 - application response caching and refresh throttling;
 - live fixtures remaining visible when predictions are unavailable;
+- unmatched input predictions remaining visible as individually audited abstentions;
 - model-artifact schema, range and provenance validation;
 - bookmaker-price independence of local-model inference;
+- source-data age reducing model reliability without changing inference timestamps;
 - chronological EPL holdout metrics and exact live-fixture generation;
 - fixture, opponent and kickoff context in replay and live dashboards;
 - UK EPL region defaults and three-outcome soccer normalization;
@@ -351,18 +389,51 @@ tests/             unit, security and end-to-end tests
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for deeper trade-offs and [SECURITY.md](SECURITY.md) for the threat model.
 
-## Limitations and next steps
+## Current limitations
 
-With more time I would:
+- **The live trained model covers EPL only.** MLB and NBA fixtures remain visible but
+  correctly show `model missing`; inventing scores would violate source independence.
+- **Elo is a deliberately small baseline.** It learns team strength, home advantage,
+  draws, and goal-margin effects, but not injuries, line-ups, expected goals, rest,
+  transfers, weather, or tactical match-ups. Its 48.2% three-way holdout accuracy is
+  reported rather than hidden.
+- **The reconciliation reliability formula is designed, not learned.** Its factors and
+  safety gates are defensible and versioned, but they have not been fitted on a large,
+  representative corpus of model/market/outcome triples.
+- **The eight-event replay is synthetic and small.** It proves required branches and
+  blind-baseline corrections; its 100% binary selection accuracy is not evidence of
+  real-world performance or complete three-way outcome accuracy.
+- **A free odds feed is a single dependency.** Quotas, delayed bookmakers, provider
+  schema changes, and incomplete coverage can still reduce availability despite cache,
+  retry, validation, and degraded-mode controls.
+- **SQLite and the local HTTP server are assessment-scale choices.** They are suitable
+  for one operator, not concurrent users or an internet-facing service. The server has
+  same-origin and Host-header controls but no user authentication or TLS termination.
+- **The audit is tamper-evident, not independently immutable.** Someone able to replace
+  both the database and application could reconstruct hashes; checkpoints are not yet
+  externally signed.
+- **There is no continuous outcome ingestion or drift loop.** Calibration and source
+  performance are evaluated on committed fixtures and the model holdout, not monitored
+  automatically after every settled live event.
 
-1. add authorised NBA and MLB result pipelines using the same chronological protocol;
-2. expand EPL evaluation across more seasons and recalibrate by confidence bucket;
-3. support simultaneous full-outcome distributions, spreads and totals without conflating probability spaces;
-4. replace SQLite with PostgreSQL for concurrent writers and sign audit checkpoints in external immutable storage;
-5. add schema-contract monitoring for the odds provider and alerting for calibration drift;
-6. deploy the dashboard behind authenticated HTTPS rather than exposing a local demonstration server.
+## Prioritised next steps
 
-The deliberately bounded scope is head-to-head outcome reconciliation for MLB, NBA and EPL. EPL supports home, away and draw selections while preserving one ranked prediction per event. The project prioritizes a complete, defensible system over unsupported market breadth.
+| Priority | Improvement | Why it comes next |
+| --- | --- | --- |
+| P0 | Build a leakage-safe settled-outcome pipeline and rolling backtests across many seasons | Produces the evidence needed to tune reliability weights and determine whether reconciliation improves over both sources outside the synthetic replay |
+| P0 | Add monitoring for provider schema, quota, latency, missing-book coverage, calibration drift, and audit failures | Makes silent data-quality degradation observable before it changes rankings |
+| P1 | Strengthen and calibrate the EPL model using expected goals, recent form, injuries, line-ups, rest, and promoted-team priors | Improves the weakest current signal while retaining a strict odds-free feature boundary |
+| P1 | Add authorised, reproducible NBA and MLB training pipelines with sport-specific features | Converts the existing explicit `model missing` states into genuinely independent predictions |
+| P1 | Learn or tune the source-selection policy on chronological out-of-sample reconciliation data | Replaces hand-designed reliability coefficients with measured ones while preserving hard safety gates and an explainable fallback |
+| P2 | Add a reviewed event-identity service and a second odds provider | Reduces failures from naming changes and a single provider without allowing unsafe fuzzy matches |
+| P2 | Move state to PostgreSQL, process refreshes in background workers, and add authenticated HTTPS/RBAC | Supports concurrent production use, isolation, durable rate limiting, and operational recovery |
+| P2 | Sign versioned model artifacts and audit checkpoints in external immutable storage | Provides provenance and tamper resistance beyond local hash chains |
+| P3 | Extend reconciliation to complete outcome distributions, spreads, and totals | Broadens capability only after each probability space has separate validation and calibration |
+
+The deliberately bounded scope is head-to-head outcome reconciliation for MLB, NBA
+and EPL. EPL supports home, away and draw selections while preserving one ranked
+prediction per event. The project prioritizes a complete, defensible system over
+unsupported market breadth.
 
 ## Contributing
 

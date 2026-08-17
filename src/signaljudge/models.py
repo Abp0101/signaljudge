@@ -79,6 +79,7 @@ class Prediction:
     generated_at: datetime
     model_version: str
     out_of_distribution: bool = False
+    source_data_at: Optional[datetime] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Prediction":
@@ -94,6 +95,13 @@ class Prediction:
         out_of_distribution = data.get("out_of_distribution", False)
         if not isinstance(out_of_distribution, bool):
             raise ValidationError("out_of_distribution must be a boolean")
+        generated_at = parse_datetime(data.get("generated_at"), "generated_at")
+        source_data_value = data.get("source_data_at")
+        source_data_at = (
+            parse_datetime(source_data_value, "source_data_at")
+            if source_data_value is not None
+            else None
+        )
         prediction = cls(
             event_id=require_id(data.get("event_id"), "event_id"),
             sport_key=require_id(data.get("sport_key"), "sport_key"),
@@ -105,9 +113,10 @@ class Prediction:
             historical_accuracy=require_probability(data.get("historical_accuracy"), "historical_accuracy"),
             historical_sample_size=sample_size,
             calibration_error=calibration_error,
-            generated_at=parse_datetime(data.get("generated_at"), "generated_at"),
+            generated_at=generated_at,
             model_version=require_id(data.get("model_version"), "model_version"),
             out_of_distribution=out_of_distribution,
+            source_data_at=source_data_at,
         )
         valid_selections = {prediction.home_team, prediction.away_team}
         if prediction.sport_key.startswith("soccer_"):
@@ -120,6 +129,8 @@ class Prediction:
             raise ValidationError("home_team and away_team must be different")
         if prediction.generated_at > prediction.commence_time:
             raise ValidationError("generated_at must not be after commence_time")
+        if prediction.source_data_at is not None and prediction.source_data_at > prediction.generated_at:
+            raise ValidationError("source_data_at must not be after generated_at")
         return prediction
 
 

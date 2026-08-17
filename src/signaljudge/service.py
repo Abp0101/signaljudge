@@ -40,6 +40,7 @@ def _prediction_payload(item: Prediction) -> Dict[str, Any]:
         "generated_at": isoformat(item.generated_at),
         "model_version": item.model_version,
         "out_of_distribution": item.out_of_distribution,
+        "source_data_at": isoformat(item.source_data_at) if item.source_data_at else None,
     }
 
 
@@ -98,6 +99,7 @@ class ReconciliationService:
                         all_model_ranks[prediction.event_id],
                         errors.get(prediction.event_id, "market normalization failed"),
                         previous_decisions.get(prediction.event_id),
+                        self.config,
                     )
                 )
                 continue

@@ -12,24 +12,42 @@ from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp, is
 
 @dataclass(frozen=True)
 class DecisionConfig:
-    policy_version: str = "2.0"
+    policy_version: str = "2.1"
     material_probability_gap: float = 0.10
     material_rank_delta: int = 3
     coherent_movement_threshold: float = 0.08
     coherent_book_fraction: float = 0.60
     minimum_books: int = 2
     minimum_source_reliability: float = 0.25
+    market_quality_ceiling: float = 0.72
+    model_data_half_life_days: float = 365.0
+    minimum_model_data_freshness: float = 0.65
+    model_data_age_notice_days: float = 30.0
 
 
-def model_reliability(prediction: Prediction, as_of: datetime) -> float:
+def model_reliability(
+    prediction: Prediction,
+    as_of: datetime,
+    config: DecisionConfig = DecisionConfig(),
+) -> float:
     sample_factor = min(1.0, 0.55 + 0.45 * prediction.historical_sample_size / 250.0)
     age_hours = max(0.0, (as_of - prediction.generated_at).total_seconds() / 3600.0)
-    freshness = max(0.65, 1.0 - 0.003 * age_hours)
+    inference_freshness = max(0.65, 1.0 - 0.003 * age_hours)
+    source_age_days = max(
+        0.0,
+        (as_of - (prediction.source_data_at or prediction.generated_at)).total_seconds()
+        / 86_400.0,
+    )
+    data_freshness = max(
+        config.minimum_model_data_freshness,
+        0.5 ** (source_age_days / config.model_data_half_life_days),
+    )
     distribution_factor = 0.48 if prediction.out_of_distribution else 1.0
     return clamp(
         prediction.historical_accuracy
         * sample_factor
-        * freshness
+        * inference_freshness
+        * data_freshness
         * (1.0 - prediction.calibration_error)
         * distribution_factor
     )
@@ -43,6 +61,7 @@ def _human_rationale(codes: List[str], winner: str) -> str:
         "MARKET_STALE": "the available bookmaker prices are stale",
         "MARKET_OUTLIERS_REMOVED": "isolated bookmaker outliers were removed before consensus",
         "MODEL_OUT_OF_DISTRIBUTION": "the prediction is outside the model's validated operating distribution",
+        "MODEL_SOURCE_DATA_AGED": "the model's source data is older than the policy notice threshold",
         "MODEL_HIGHER_RELIABILITY": "the calibrated model has the stronger reliability score",
         "MARKET_HIGHER_RELIABILITY": "the fresh cross-book consensus has the stronger reliability score",
         "INSUFFICIENT_MARKET_COVERAGE": "too few valid bookmakers support the market signal",
@@ -63,6 +82,7 @@ def unresolved_decision(
     model_rank: int,
     reason: str,
     previous: Optional[Decision] = None,
+    config: DecisionConfig = DecisionConfig(),
 ) -> Decision:
     codes = ["MARKET_UNAVAILABLE"]
     return Decision(
@@ -71,7 +91,7 @@ def unresolved_decision(
         model_probability=prediction.model_probability,
         market_probability=None,
         reconciled_probability=None,
-        model_reliability=model_reliability(prediction, as_of),
+        model_reliability=model_reliability(prediction, as_of, config),
         market_reliability=0.0,
         model_weight=0.0,
         market_weight=0.0,
@@ -107,8 +127,8 @@ def reconcile(
     probability_gap = abs(prediction.model_probability - market.probability)
     rank_delta = abs(model_rank - market_rank)
     material = probability_gap >= config.material_probability_gap or rank_delta >= config.material_rank_delta
-    model_score = model_reliability(prediction, as_of)
-    market_score = clamp(0.72 * market.quality)
+    model_score = model_reliability(prediction, as_of, config)
+    market_score = clamp(config.market_quality_ceiling * market.quality)
     model_weight = model_score
     market_weight = market_score
     codes: List[str] = []
@@ -121,6 +141,12 @@ def reconcile(
         codes.append("MARKET_OUTLIERS_REMOVED")
     if market.source_degraded:
         codes.append("MARKET_SOURCE_DEGRADED")
+    if prediction.source_data_at is not None:
+        source_age_days = max(
+            0.0, (as_of - prediction.source_data_at).total_seconds() / 86_400.0
+        )
+        if source_age_days >= config.model_data_age_notice_days:
+            codes.append("MODEL_SOURCE_DATA_AGED")
 
     forced_winner: Optional[str] = None
     market_unusable = market.valid_book_count < config.minimum_books or market.stale

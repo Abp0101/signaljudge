@@ -161,7 +161,8 @@ def command_demo(args: argparse.Namespace) -> int:
     for source, values in metrics.items():
         print(
             f"  {source:<6} Brier={values['brier']:.3f} "
-            f"LogLoss={values['log_loss']:.3f} Accuracy={values['accuracy']:.1%}"
+            f"LogLoss={values['log_loss']:.3f} "
+            f"SelectionAccuracy={values['accuracy']:.1%}"
         )
     corrected = [case for case in cases if case["corrected_model_only"] or case["corrected_market_only"]]
     print(f"Blind-source errors corrected: {len(corrected)}")
