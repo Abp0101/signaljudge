@@ -234,6 +234,7 @@ def command_app(args: argparse.Namespace) -> int:
     load_api_key_env_file(Path(args.env_file))
     config = ApplicationConfig(
         prediction_dir=Path(args.predictions_dir).resolve(),
+        model_dir=Path(args.model_dir).resolve(),
         db_path=Path(args.db).resolve(),
         cache_dir=Path(args.cache_dir).resolve(),
         demo_dir=resolve_demo_dir(),
@@ -288,6 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--predictions-dir",
         default="predictions",
         help="directory containing one <sport_key>.json prediction file per sport",
+    )
+    app.add_argument(
+        "--model-dir",
+        default="models",
+        help="directory containing validated <sport_key>.model.json artifacts",
     )
     app.add_argument("--db", default=".signaljudge/application.db")
     app.add_argument("--cache-dir", default=".signaljudge/cache")

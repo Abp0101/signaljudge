@@ -19,6 +19,7 @@ from signaljudge.io import load_json
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "data" / "demo"
+MODELS = ROOT / "models"
 
 
 class FakeProvider:
@@ -40,9 +41,11 @@ class Clock:
 
 
 class ApplicationTests(unittest.TestCase):
-    def _service(self, root, with_predictions=True, clock=None):
+    def _service(self, root, with_predictions=True, clock=None, model_dir=None):
         prediction_dir = root / "predictions"
         prediction_dir.mkdir()
+        empty_model_dir = root / "models"
+        empty_model_dir.mkdir()
         if with_predictions:
             shutil.copy2(
                 DEMO / "model_predictions.json",
@@ -54,6 +57,7 @@ class ApplicationTests(unittest.TestCase):
         provider = FakeProvider(snapshot)
         config = ApplicationConfig(
             prediction_dir=prediction_dir,
+            model_dir=model_dir or empty_model_dir,
             db_path=root / "application.db",
             cache_dir=root / "cache",
             demo_dir=DEMO,
@@ -109,6 +113,63 @@ class ApplicationTests(unittest.TestCase):
             payload = service.live_rankings("baseball_mlb", "us")
         self.assertEqual(payload["total_events"], 8)
         self.assertTrue(any("malformed provider event" in item for item in payload["warnings"]))
+
+    def test_trained_model_generates_exact_live_fixture_predictions(self):
+        snapshot = {
+            "success": True,
+            "source": "test",
+            "odds_format": "decimal",
+            "fetched_at": "2026-08-16T15:00:00Z",
+            "evaluated_at": "2026-08-16T15:00:00Z",
+            "data_origin": "LIVE",
+            "region": "uk",
+            "quota": {"remaining": "99"},
+            "data": [
+                {
+                    "event_id": "epl-live-1",
+                    "sport_key": "soccer_epl",
+                    "home_team": "Arsenal",
+                    "away_team": "Coventry City",
+                    "start_time": "2026-08-21T19:00:00Z",
+                    "books": [
+                        {
+                            "book": "one",
+                            "market": "h2h",
+                            "updated_at": "2026-08-16T14:59:00Z",
+                            "outcomes": [
+                                {"name": "Arsenal", "price": 1.60},
+                                {"name": "Draw", "price": 4.20},
+                                {"name": "Coventry City", "price": 5.80},
+                            ],
+                        },
+                        {
+                            "book": "two",
+                            "market": "h2h",
+                            "updated_at": "2026-08-16T14:58:00Z",
+                            "outcomes": [
+                                {"name": "Arsenal", "price": 1.64},
+                                {"name": "Draw", "price": 4.10},
+                                {"name": "Coventry City", "price": 5.60},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service, provider = self._service(
+                root, with_predictions=False, model_dir=MODELS
+            )
+            provider.snapshot = snapshot
+            payload = service.live_rankings("soccer_epl", "uk")
+        self.assertEqual(payload["prediction_source"]["status"], "trained")
+        self.assertEqual(payload["prediction_source"]["type"], "trained_local_model")
+        self.assertEqual(payload["prediction_source"]["sample_size"], 280)
+        self.assertEqual(payload["reconciled_events"], 1)
+        self.assertEqual(payload["matches"][0]["selection"], "Arsenal")
+        self.assertIsNotNone(payload["matches"][0]["market_probability"])
+        self.assertTrue(payload["audit"]["valid"])
 
     def test_response_cache_protects_quota_and_manual_refresh_is_rate_limited(self):
         with tempfile.TemporaryDirectory() as directory:

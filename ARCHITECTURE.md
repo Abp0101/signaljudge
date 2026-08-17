@@ -12,6 +12,7 @@ The assessment context favours reproducibility, clarity and a short setup path. 
 |---|---|---|
 | Live provider | Secure V4 request, sport-aware region, schema adapter, quota tracking, retries | Recent last-known-good response marked degraded; expired cache rejected |
 | Input validator | Bounds and validates untrusted JSON | Rejects invalid record; never executes input |
+| Local model adapter | Converts fixture identity into an independent probability from a validated artifact | Missing/invalid artifact remains explicit; started games are never backfilled |
 | Market normalizer | Converts odds, removes margin, rejects outliers | Event becomes a warning if no valid market remains |
 | Decision engine | Applies gates, weights, winner, abstention and rationale | Deterministic for the same versioned input |
 | Orchestrator | Matches, compares, ranks and persists | Idempotent content hash prevents duplicate run |
@@ -83,13 +84,27 @@ service stays the only reconciliation path.
 would require authenticated HTTPS, authorization, durable rate limiting, production
 observability, and a multi-writer database.
 
+### Versioned rating artifact over runtime training
+
+**Chosen:** train offline from allowlisted result fields, commit a small JSON artifact,
+and perform dependency-free inference inside the application.
+
+**Why:** reviewer runs are fast and deterministic; training provenance, source hashes,
+parameters and untouched holdout metrics travel with the model. The inference API
+accepts fixture identity only, making accidental odds leakage structurally difficult.
+
+**Trade-off:** the bundled EPL model uses team-strength and home-advantage features,
+not injuries, line-ups or player form. Manual prediction files intentionally override
+the artifact when a stronger independent model is available. NBA and MLB fail visibly
+as unavailable until their own authorised artifacts exist.
+
 ## Application data flow
 
 ```text
 Browser sport selection
         -> allowlisted localhost API
         -> quota-aware live provider
-        -> exact per-sport prediction adapter
+        -> fixture-only model adapter or exact prediction file
         -> existing ReconciliationService
         -> SQLite state and audit verification
         -> fixture view model
@@ -102,10 +117,30 @@ Responses are held in memory for five minutes; a manual refresh has a 30-second
 cooldown. Provider last-known-good caching remains a separate, explicitly degraded
 reliability mechanism.
 
+## Model lifecycle and leakage control
+
+```text
+Fixed historical-result URLs
+        -> allowlist six non-odds fields
+        -> chronological train / tune / untouched test
+        -> JSON artifact + source SHA-256 hashes + metrics
+        -> strict artifact validation
+        -> fixture-only inference
+        -> normal Prediction domain object
+```
+
+Prediction files have precedence over artifacts. Generated predictions use the live
+provider event ID but the model never receives the event's bookmaker list. Fixtures
+that have already started are skipped instead of being assigned a falsely pregame
+prediction. Teams missing from the training artifact are explicitly marked out of
+distribution, which activates the existing decision safety gate.
+
 ## Data integrity
 
 - All times must be timezone-aware and are converted to UTC.
 - Probability values must be finite and strictly between zero and one.
+- Rating artifacts bound team count, aliases, ratings, appearances, parameters and validation metrics.
+- Every trained artifact declares source URLs, hashes, row counts and result fields used.
 - Input files are limited to 5 MiB and 1,000 predictions.
 - Odds responses are limited to 5 MiB, 5,000 events and 250 books per event.
 - Sport and bookmaker region are selected from fixed allowlists; EPL defaults to UK books.

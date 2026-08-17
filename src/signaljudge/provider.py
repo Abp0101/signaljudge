@@ -130,7 +130,7 @@ class LiveOddsProvider:
         )
         url = f"{API_BASE_URL}/sports/{sport_key}/odds/?{query}"
         cache_path = self.cache_dir / f"{sport_key}-{selected_region}.json"
-        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.3"}
+        headers = {"Accept": "application/json", "User-Agent": "SignalJudge/1.4"}
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):

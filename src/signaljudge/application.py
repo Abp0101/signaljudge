@@ -29,6 +29,7 @@ from signaljudge.models import (
     require_text,
 )
 from signaljudge.provider import ALLOWED_REGIONS, ALLOWED_SPORTS, SPORT_CONFIGS, LiveOddsProvider
+from signaljudge.prediction_models import Fixture, load_model_if_available
 from signaljudge.service import ReconciliationService
 from signaljudge.state import StateStore
 from signaljudge.web_assets import APP_CSS, APP_HTML, APP_JS
@@ -41,6 +42,7 @@ class RefreshRateLimitError(ValidationError):
 @dataclass(frozen=True)
 class ApplicationConfig:
     prediction_dir: Path
+    model_dir: Path
     db_path: Path
     cache_dir: Path
     demo_dir: Path
@@ -75,6 +77,14 @@ class ApplicationService:
                     predictions = self._load_sport_predictions(key)
                     status = "ready"
                     count = len(predictions)
+                except ValidationError:
+                    status = "invalid"
+            else:
+                try:
+                    model = load_model_if_available(self.config.model_dir, key)
+                    if model is not None:
+                        status = "trained"
+                        count = len(model.ratings)
                 except ValidationError:
                     status = "invalid"
             sports.append(
@@ -119,10 +129,7 @@ class ApplicationService:
                     )
             self._last_provider_call[cache_key] = now
             snapshot = self.provider.fetch(sport_key, region=selected_region)
-            predictions, prediction_status = self._prediction_source(sport_key)
-            payload = self._build_live_payload(
-                sport_key, selected_region, snapshot, predictions, prediction_status
-            )
+            payload = self._build_live_payload(sport_key, selected_region, snapshot)
             payload["response_cache"] = False
             payload["response_cache_age_seconds"] = 0.0
             self._responses[cache_key] = (self.monotonic(), payload)
@@ -156,6 +163,10 @@ class ApplicationService:
             prediction_status="demo",
             predictions_loaded=len(predictions),
             unmatched_predictions=0,
+            prediction_metadata={
+                "type": "synthetic_assessment_fixture",
+                "model_version": predictions[0].model_version,
+            },
             data_origin="DEMO",
             degraded=False,
             cache_age_seconds=0.0,
@@ -169,8 +180,6 @@ class ApplicationService:
         sport_key: str,
         region: str,
         snapshot: Mapping[str, Any],
-        predictions: List[Prediction],
-        prediction_status: str,
     ) -> Dict[str, Any]:
         events = snapshot.get("data")
         if not isinstance(events, list):
@@ -205,6 +214,9 @@ class ApplicationService:
                 invalid_event_count += 1
                 continue
             valid_events.append(normalized_event)
+        predictions, prediction_status, prediction_metadata = self._prediction_source(
+            sport_key, valid_events, snapshot
+        )
         event_ids = {
             str(event.get("event_id"))
             for event in valid_events
@@ -245,6 +257,7 @@ class ApplicationService:
             prediction_status=prediction_status,
             predictions_loaded=len(predictions),
             unmatched_predictions=unmatched_predictions,
+            prediction_metadata=prediction_metadata,
             data_origin=str(snapshot.get("data_origin", "UNKNOWN")),
             degraded=bool(snapshot.get("degraded", False)),
             cache_age_seconds=float(snapshot.get("cache_age_seconds", 0.0) or 0.0),
@@ -271,6 +284,7 @@ class ApplicationService:
         prediction_status: str,
         predictions_loaded: int,
         unmatched_predictions: int,
+        prediction_metadata: Mapping[str, Any],
         data_origin: str,
         degraded: bool,
         cache_age_seconds: float,
@@ -298,6 +312,7 @@ class ApplicationService:
                 "status": prediction_status,
                 "loaded": predictions_loaded,
                 "unmatched": unmatched_predictions,
+                **dict(prediction_metadata),
             },
             "market_source": {
                 "origin": data_origin,
@@ -378,11 +393,30 @@ class ApplicationService:
             )
         return predictions
 
-    def _prediction_source(self, sport_key: str) -> Tuple[List[Prediction], str]:
+    def _prediction_source(
+        self,
+        sport_key: str,
+        events: List[Mapping[str, Any]],
+        snapshot: Mapping[str, Any],
+    ) -> Tuple[List[Prediction], str, Dict[str, Any]]:
         path = self._prediction_path(sport_key)
-        if not path.is_file():
-            return [], "missing"
-        return self._load_sport_predictions(sport_key), "ready"
+        if path.is_file():
+            predictions = self._load_sport_predictions(sport_key)
+            versions = sorted({item.model_version for item in predictions})
+            return predictions, "file", {
+                "type": "prediction_file",
+                "model_version": ",".join(versions),
+            }
+        model = load_model_if_available(self.config.model_dir, sport_key)
+        if model is None:
+            return [], "missing", {"type": "unavailable"}
+        generated_at = parse_datetime(
+            snapshot.get("evaluated_at") or snapshot.get("fetched_at"),
+            "snapshot.evaluated_at",
+        )
+        fixtures = [Fixture.from_event(event) for event in events]
+        predictions = model.predict(fixtures, generated_at)
+        return predictions, "trained", model.metadata()
 
 
 class ApplicationHTTPServer(ThreadingHTTPServer):
@@ -394,7 +428,7 @@ class ApplicationHTTPServer(ThreadingHTTPServer):
 
 
 class ApplicationRequestHandler(BaseHTTPRequestHandler):
-    server_version = "SignalJudge/1.3"
+    server_version = "SignalJudge/1.4"
     sys_version = ""
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract

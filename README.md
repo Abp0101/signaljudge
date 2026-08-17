@@ -48,9 +48,10 @@ PYTHONPATH=src python3 -m signaljudge app --open
 Or use `make app`. The application offers two modes:
 
 - **Live markets** fetches current odds for MLB, NBA, or the English Premier
-  League. It reads independent predictions from `predictions/<sport_key>.json`.
+  League. EPL fixtures are automatically scored by the bundled, independently
+  trained rating model. An exact prediction file can override a model artifact.
 - **Assessment demo** runs the bundled, reproducible two-snapshot fixture without
-a network connection or API key.
+  a network connection or API key.
 
 For local convenience, `app` also checks `.env` when the variable is not already
 exported. It parses only a literal `THE_ODDS_API_KEY` assignment; it does not execute
@@ -67,6 +68,46 @@ The application caches each sport/region response for five minutes and rate-limi
 manual provider refreshes to one every 30 seconds. The screen distinguishes
 provider `LIVE`, recent degraded `CACHE`, and synthetic `DEMO` data. “Live” means
 the latest provider snapshot, not necessarily a match currently in play.
+
+## Independent EPL model
+
+Live EPL predictions come from `models/soccer_epl.model.json`, a local three-way
+Elo model trained only on match results. It never receives bookmaker names, prices,
+implied probabilities, or market movements. The inference boundary accepts only an
+event ID, sport, teams and kickoff time.
+
+The reproducible trainer downloads Premier League and Championship results for
+2024/25 and 2025/26 from [Football-Data](https://www.football-data.co.uk/englandm.php).
+Although those CSVs contain betting columns, the trainer allowlists and parses only:
+
+```text
+Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR
+```
+
+Training uses a chronological 70% training split, 15% tuning split and final 15%
+untouched test split. The committed artifact records every source URL, SHA-256 hash,
+row count, chosen parameters, training cutoff and validation result:
+
+```text
+Three-way accuracy: 48.2%
+Multiclass Brier:    0.208
+Log loss:            1.036
+Calibration error:  2.8%
+Untouched test set:  280 matches
+```
+
+These are measured historical holdout results, not a claim of profitability or
+future performance. Regenerate the artifact with:
+
+```bash
+make train-models
+```
+
+Manual files in `predictions/<sport_key>.json` take precedence, allowing a stronger
+external model to be connected without changing the reconciliation engine. NBA and
+MLB currently remain explicit `model missing` states: the odds and fixtures work,
+but SignalJudge will not assign invented scores until an authorised, reproducible
+results source and validated artifact are added.
 
 Expected replay result:
 
@@ -237,7 +278,8 @@ predictions/soccer_epl.json
 ```
 
 The sport selector reports each adapter as `ready`, `missing`, or `invalid` before
-the first market fetch. See `predictions/README.md` for the adapter contract.
+the first market fetch. A `trained` EPL status means the bundled artifact will create
+predictions for exact upcoming fixtures. See `predictions/README.md` for precedence.
 
 ## State and auditability
 
@@ -276,6 +318,9 @@ The suite covers:
 - localhost Host-header and same-origin API enforcement;
 - application response caching and refresh throttling;
 - live fixtures remaining visible when predictions are unavailable;
+- model-artifact schema, range and provenance validation;
+- bookmaker-price independence of local-model inference;
+- chronological EPL holdout metrics and exact live-fixture generation;
 - fixture, opponent and kickoff context in replay and live dashboards;
 - UK EPL region defaults and three-outcome soccer normalization;
 - migration from the original SQLite schema;
@@ -295,9 +340,12 @@ src/signaljudge/
   evaluation.py    proper scoring rules and baselines
   report.py        dependency-free replay and live dashboards
   application.py   secure localhost API and application orchestration
+  prediction_models.py validated odds-independent model inference
   web_assets.py    dependency-free interactive operator console
 data/demo/         labelled synthetic two-snapshot fixture
+models/            versioned trained artifacts with provenance and metrics
 predictions/       independent per-sport live prediction adapters
+scripts/           reproducible result-only model training
 tests/             unit, security and end-to-end tests
 ```
 
@@ -307,8 +355,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for deeper trade-offs and [SECURITY.md](S
 
 With more time I would:
 
-1. evaluate on a large, time-stamped real historical dataset and tune thresholds only on a separate training split;
-2. calibrate source reliability by league and confidence bucket using rolling Brier scores;
+1. add authorised NBA and MLB result pipelines using the same chronological protocol;
+2. expand EPL evaluation across more seasons and recalibrate by confidence bucket;
 3. support simultaneous full-outcome distributions, spreads and totals without conflating probability spaces;
 4. replace SQLite with PostgreSQL for concurrent writers and sign audit checkpoints in external immutable storage;
 5. add schema-contract monitoring for the odds provider and alerting for calibration drift;

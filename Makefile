@@ -1,4 +1,4 @@
-.PHONY: app demo test check clean
+.PHONY: app demo train-models test check clean
 
 PYTHON ?= python3
 
@@ -7,6 +7,9 @@ demo:
 
 app:
 	PYTHONPATH=src $(PYTHON) -m signaljudge app --open
+
+train-models:
+	$(PYTHON) scripts/train_rating_models.py
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v
