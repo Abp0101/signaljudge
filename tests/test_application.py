@@ -82,6 +82,11 @@ class ApplicationTests(unittest.TestCase):
         self.assertTrue(first["away_team"])
         self.assertTrue(first["commence_time"].endswith("Z"))
         self.assertTrue(first["rationale"])
+        self.assertGreater(first["valid_book_count"], 0)
+        self.assertGreaterEqual(first["total_book_count"], first["valid_book_count"])
+        self.assertTrue(first["bookmakers"])
+        self.assertIsNotNone(first["market_median_age_seconds"])
+        self.assertIn(first["market_data_origin"], {"FIXTURE", "LIVE", "CACHE"})
 
     def test_missing_model_file_keeps_live_fixtures_visible_without_scores(self):
         with tempfile.TemporaryDirectory() as directory:

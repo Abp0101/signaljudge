@@ -183,6 +183,15 @@ class Decision:
     final_rank: Optional[int] = None
     previous_probability: Optional[float] = None
     previous_winner: Optional[str] = None
+    bookmakers: List[str] = field(default_factory=list)
+    valid_book_count: int = 0
+    total_book_count: int = 0
+    rejected_books: List[str] = field(default_factory=list)
+    market_dispersion: Optional[float] = None
+    market_median_age_seconds: Optional[float] = None
+    market_stale: bool = False
+    market_data_origin: str = ""
+    market_cache_age_seconds: float = 0.0
     decision_id: Optional[int] = None
     previous_decision_id: Optional[int] = None
     audit_hash: Optional[str] = None

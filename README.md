@@ -59,7 +59,7 @@ confirm the audit badge. `make check` then exercises the same invariants in CI.
 | Brief requirement | Verifiable evidence |
 | --- | --- |
 | Local model or file plus live public odds; compare the same events and identify at least three material disagreements | The live application combines the odds-independent EPL artifact with The Odds API using exact event identity. The offline acceptance fixture produces six material conflicts. |
-| Explicitly choose a source, explain every choice, and correct a failure caused by blindly trusting either source | Policy `2.2` records `MODEL`, `MARKET`, or `ABSTAIN`, structured reason codes, weights, and rationale. Settled-outcome replay corrects both a model-only and a market-only failure. |
+| Explicitly choose a source, explain every choice, and correct a failure caused by blindly trusting either source | Policy `2.3` records `MODEL`, `MARKET`, or `ABSTAIN`, structured reason codes, weights, rationale, bookmaker coverage, exclusions, freshness and dispersion. Settled-outcome replay corrects both a model-only and a market-only failure. |
 | Maintain batch state, update confidence with new data, and output a ranked full audit trail | Two snapshots update market movement, source confidence, previous probability, winner, and rank in SQLite. JSON and HTML expose every score and rationale; decision and run hash chains verify 16 replay entries. |
 
 Live mode proves the external integration; the deterministic replay proves required
@@ -151,6 +151,10 @@ future performance. Regenerate the artifact with:
 make train-models
 ```
 
+Repeated runs over source files with the recorded hashes reproduce the ratings,
+parameters, aliases, provenance and metrics exactly. The `trained_at` field records
+the actual build time and is therefore intentionally different on each regeneration.
+
 Manual files in `predictions/<sport_key>.json` take precedence, allowing a stronger
 external model to be connected without changing the reconciliation engine. The NBA
 and MLB availability decision is explained above and remains visible in the UI.
@@ -222,7 +226,7 @@ error, inference age, underlying source-data age, and whether the prediction is 
 the model's validated distribution. A model artifact therefore does not become “fresh”
 merely because inference ran against a new market snapshot.
 
-Market reliability considers valid-book coverage, odds freshness, cross-book dispersion, and rejected outliers.
+Market reliability considers valid-book coverage, odds freshness, cross-book dispersion, and rejected outliers. Every reconciled decision preserves the contributing bookmaker names, valid and total counts, exclusions, median quote age, dispersion, origin and cache age; the application displays this evidence alongside the selected region.
 
 Both values are versioned **policy scores**, not claimed probabilities of correctness.
 The market score has an explicit `0.72` ceiling in `DecisionConfig`; fitting that ceiling

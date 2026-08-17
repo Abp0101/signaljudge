@@ -32,6 +32,12 @@ def decision(selection: str) -> Decision:
         home_team="Arsenal",
         away_team="Chelsea",
         final_rank=1,
+        bookmakers=["book-one", "book-two"],
+        valid_book_count=2,
+        total_book_count=3,
+        rejected_books=["bad-book"],
+        market_dispersion=0.01,
+        market_median_age_seconds=120.0,
     )
 
 
@@ -75,6 +81,8 @@ class DashboardSecurityTests(unittest.TestCase):
         self.assertIn('"live": true', html)
         self.assertIn("Arsenal", html)
         self.assertIn("Chelsea", html)
+        self.assertIn("${d.valid_book_count??0}/${d.total_book_count??0} books", html)
+        self.assertIn('"book-one"', html)
 
 
 if __name__ == "__main__":

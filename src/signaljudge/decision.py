@@ -5,14 +5,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from signaljudge.models import Decision, NormalizedMarket, Prediction, clamp, isoformat
 
 
 @dataclass(frozen=True)
 class DecisionConfig:
-    policy_version: str = "2.2"
+    policy_version: str = "2.3"
     material_probability_gap: float = 0.10
     material_rank_delta: int = 3
     coherent_movement_threshold: float = 0.08
@@ -104,6 +104,20 @@ def _human_rationale(codes: List[str], winner: str) -> str:
     return f"{winner.title()} won because {details}."
 
 
+def _market_evidence(market: NormalizedMarket) -> Dict[str, Any]:
+    return {
+        "bookmakers": sorted(market.per_book),
+        "valid_book_count": market.valid_book_count,
+        "total_book_count": market.total_book_count,
+        "rejected_books": list(market.rejected_books),
+        "market_dispersion": market.dispersion,
+        "market_median_age_seconds": market.median_age_seconds,
+        "market_stale": market.stale,
+        "market_data_origin": market.data_origin,
+        "market_cache_age_seconds": market.cache_age_seconds,
+    }
+
+
 def unresolved_decision(
     prediction: Prediction,
     as_of: datetime,
@@ -131,7 +145,7 @@ def unresolved_decision(
         rank_delta=None,
         movement=0.0,
         movement_coherence=0.0,
-        reason_codes=tuple(codes),
+        reason_codes=codes,
         rationale=f"Abstained because no valid matching market evidence is available: {reason}.",
         sport_key=prediction.sport_key,
         commence_time=isoformat(prediction.commence_time),
@@ -262,6 +276,7 @@ def reconcile(
             status="ABSTAINED",
             previous_probability=previous.reconciled_probability if previous else None,
             previous_winner=previous.winner if previous else None,
+            **_market_evidence(market),
         )
     if assessment.forced_winner == "MODEL":
         model_weight *= config.forced_winner_multiplier
@@ -309,4 +324,5 @@ def reconcile(
         away_team=prediction.away_team,
         previous_probability=previous.reconciled_probability if previous else None,
         previous_winner=previous.winner if previous else None,
+        **_market_evidence(market),
     )

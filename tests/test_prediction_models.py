@@ -7,7 +7,7 @@ from signaljudge.io import load_json
 from signaljudge.models import ValidationError
 from signaljudge.prediction_models import Fixture, RatingModel
 from signaljudge.rating import elo_outcome_probabilities
-from scripts.train_rating_models import Parameters, probabilities
+from scripts.train_rating_models import ALIASES, Parameters, probabilities
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,7 @@ class RatingModelTests(unittest.TestCase):
         self.assertGreater(self.model.metrics.accuracy, 1 / 3)
         self.assertLess(self.model.metrics.calibration_error, 0.10)
         self.assertEqual(len(self.model.sources), 4)
+        self.assertEqual(self.model.aliases, ALIASES)
 
     def test_prediction_is_independent_of_bookmaker_prices(self):
         short_price = self.event(

@@ -9,7 +9,6 @@
     "Manchester United": "Man United",
     "Newcastle United": "Newcastle",
     "Nottingham Forest": "Nott'm Forest",
-    "Sheffield United": "Sheffield United",
     "Tottenham Hotspur": "Tottenham",
     "West Ham United": "West Ham",
     "Wolverhampton Wanderers": "Wolves"
@@ -180,7 +179,7 @@
     }
   ],
   "sport_key": "soccer_epl",
-  "trained_at": "2026-08-16T16:07:52.260701Z",
+  "trained_at": "2026-08-17T16:49:39.193156Z",
   "training_cutoff": "2026-05-24",
   "training_protocol": {
     "notes": "Only the six allowlisted result fields are parsed from each source.",

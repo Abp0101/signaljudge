@@ -71,6 +71,20 @@ class OddsTests(unittest.TestCase):
         market = normalize_market(snapshot([0.43, 0.43, 0.43, 0.43, 0.78]), prediction())
         self.assertAlmostEqual(market.probability, 0.43, places=5)
         self.assertEqual(market.rejected_books, ["book4"])
+        decision = reconcile(
+            prediction(),
+            market,
+            datetime(2026, 8, 16, 18, 0, tzinfo=timezone.utc),
+            model_rank=1,
+            market_rank=1,
+        )
+        self.assertEqual(decision.valid_book_count, 4)
+        self.assertEqual(decision.total_book_count, 5)
+        self.assertEqual(decision.bookmakers, ["book0", "book1", "book2", "book3"])
+        self.assertEqual(decision.rejected_books, ["book4"])
+        self.assertAlmostEqual(decision.market_dispersion, 0.0)
+        self.assertEqual(decision.market_median_age_seconds, 120.0)
+        self.assertEqual(decision.market_data_origin, "FIXTURE")
 
     def test_detects_stale_market(self):
         market = normalize_market(snapshot([0.55] * 5, "2026-08-16T14:00:00Z"), prediction())
